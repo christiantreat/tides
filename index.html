@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tide Data App</title>
+    <style>
+        body {
+            font-family: Courier, monospace;
+            background-color: #96ACB7;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: #05204A;
+        }
+        .iphone {
+            background-color: #E8EEF2;
+            border-radius: 40px;
+            box-shadow: 0 0 20px rgba(5, 32, 74, 0.2);
+            overflow: hidden;
+            width: 375px;
+            height: 812px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .tide-info {
+            background-color: #FFFFFF;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            width: 100%;
+            box-sizing: border-box;
+            text-align: center;
+        }
+        .tide-info h2 {
+            font-size: 18px;
+            margin: 0 0 10px 0;
+            font-family: Arial, sans-serif;
+            color: #05204A;
+        }
+        .tide-info p {
+            margin: 5px 0;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .current-tide {
+            font-size: 36px;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 20px;
+            color: #05204A;
+        }
+        .next-tide {
+            font-size: 24px;
+            text-align: center;
+            margin-bottom: 20px;
+            color: #05204A;
+        }
+        #loading, #error {
+            text-align: center;
+            font-size: 18px;
+            color: #05204A;
+        }
+    </style>
+</head>
+<body>
+    <div class="iphone">
+        <div id="loading">Loading tide data...</div>
+        <div id="error" style="display: none;"></div>
+        <div class="current-tide" id="currentTide"></div>
+        <div class="next-tide" id="nextTide"></div>
+        <div class="tide-info">
+            <h2>Low Tide</h2>
+            <p id="lowTide"></p>
+        </div>
+        <div class="tide-info">
+            <h2>High Tide</h2>
+            <p id="highTide"></p>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?date=today&station=8514560&product=predictions&datum=STND&time_zone=lst_ldt&units=english&format=json';
+
+        async function fetchTideData() {
+            try {
+                const response = await fetch(API_URL);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                return data.predictions;
+            } catch (error) {
+                console.error('Error fetching tide data:', error);
+                throw error;
+            }
+        }
+
+        function findTideExtremes(predictions) {
+            let lowTide = { time: null, level: Infinity };
+            let highTide = { time: null, level: -Infinity };
+
+            predictions.forEach(prediction => {
+                const level = parseFloat(prediction.v);
+                if (level < lowTide.level) {
+                    lowTide = { time: prediction.t, level: level };
+                }
+                if (level > highTide.level) {
+                    highTide = { time: prediction.t, level: level };
+                }
+            });
+
+            return { lowTide, highTide };
+        }
+
+        function getCurrentTideInfo(predictions) {
+            const now = new Date();
+            const currentPrediction = predictions.reduce((prev, curr) => {
+                const prevTime = new Date(prev.t);
+                const currTime = new Date(curr.t);
+                return Math.abs(currTime - now) < Math.abs(prevTime - now) ? curr : prev;
+            });
+
+            return {
+                time: currentPrediction.t,
+                level: parseFloat(currentPrediction.v)
+            };
+        }
+
+        function getNextTideEvent(currentTime, lowTide, highTide) {
+            const currentDateTime = new Date(currentTime);
+            const lowTideTime = new Date(lowTide.time);
+            const highTideTime = new Date(highTide.time);
+
+            const timeToLow = lowTideTime - currentDateTime;
+            const timeToHigh = highTideTime - currentDateTime;
+
+            if (timeToLow > 0 && (timeToLow < timeToHigh || timeToHigh < 0)) {
+                return { event: "Low Tide", time: lowTideTime, timeUntil: timeToLow };
+            } else {
+                return { event: "High Tide", time: highTideTime, timeUntil: timeToHigh };
+            }
+        }
+
+        function formatTime(date) {
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function formatMinutes(milliseconds) {
+            const minutes = Math.round(milliseconds / (1000 * 60));
+            const hours = Math.floor(minutes / 60);
+            const remainingMinutes = minutes % 60;
+            return `${hours}h ${remainingMinutes}m`;
+        }
+
+        async function updateTideInfo() {
+            const loadingElement = document.getElementById('loading');
+            const errorElement = document.getElementById('error');
+
+            try {
+                loadingElement.style.display = 'block';
+                errorElement.style.display = 'none';
+
+                const predictions = await fetchTideData();
+                const { lowTide, highTide } = findTideExtremes(predictions);
+                const currentTide = getCurrentTideInfo(predictions);
+                const nextTide = getNextTideEvent(currentTide.time, lowTide, highTide);
+
+                document.getElementById('currentTide').textContent = `Current Tide: ${currentTide.level.toFixed(2)} ft`;
+                document.getElementById('nextTide').textContent = `${nextTide.event} in ${formatMinutes(nextTide.timeUntil)}`;
+                document.getElementById('lowTide').textContent = `${formatTime(new Date(lowTide.time))} - ${lowTide.level.toFixed(2)} ft`;
+                document.getElementById('highTide').textContent = `${formatTime(new Date(highTide.time))} - ${highTide.level.toFixed(2)} ft`;
+
+                loadingElement.style.display = 'none';
+            } catch (error) {
+                loadingElement.style.display = 'none';
+                errorElement.style.display = 'block';
+                errorElement.textContent = 'Failed to load tide data. Please try again later.';
+            }
+        }
+
+        updateTideInfo();
+        setInterval(updateTideInfo, 60000); // Update every minute
+    </script>
+</body>
+</html>
