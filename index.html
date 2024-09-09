@@ -2,8 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tide Data App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Port Jefferson Tide Data</title>
     <style>
         body {
             font-family: Courier, monospace;
@@ -13,7 +15,7 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
+            min-height: 100vh;
             color: #05204A;
         }
         .iphone {
@@ -21,15 +23,24 @@
             border-radius: 40px;
             box-shadow: 0 0 20px rgba(5, 32, 74, 0.2);
             overflow: hidden;
-            width: 375px;
-            height: 812px;
+            width: 100%;
+            max-width: 375px;
+            height: 100vh;
+            max-height: 812px;
             position: relative;
             display: flex;
             flex-direction: column;
-            justify-content: center;
+            justify-content: flex-start;
             align-items: center;
             padding: 20px;
             box-sizing: border-box;
+        }
+        .location {
+            font-size: 24px;
+            font-weight: bold;
+            margin-top: env(safe-area-inset-top);
+            margin-bottom: 20px;
+            color: #05204A;
         }
         .tide-info {
             background-color: #FFFFFF;
@@ -73,6 +84,7 @@
 </head>
 <body>
     <div class="iphone">
+        <div class="location">Port Jefferson</div>
         <div id="loading">Loading tide data...</div>
         <div id="error" style="display: none;"></div>
         <div class="current-tide" id="currentTide"></div>
@@ -89,6 +101,35 @@
 
     <script>
         const API_URL = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?date=today&station=8514560&product=predictions&datum=STND&time_zone=lst_ldt&units=english&format=json';
+
+        // Function to enable full-screen mode
+        function enableFullScreen() {
+            if (document.documentElement.requestFullscreen) {
+                document.documentElement.requestFullscreen();
+            } else if (document.documentElement.webkitRequestFullscreen) { // Safari
+                document.documentElement.webkitRequestFullscreen();
+            }
+        }
+
+        // Check if the device is an iPhone
+        function isIPhone() {
+            return /iPhone/i.test(navigator.userAgent) && !window.MSStream;
+        }
+
+        // Event listener for page load
+        window.addEventListener('load', () => {
+            if (isIPhone()) {
+                // Add to home screen prompt
+                if (!navigator.standalone) {
+                    alert("To use this app in full-screen mode, please add it to your home screen.");
+                }
+                
+                // Enable full-screen mode when launched from home screen
+                if (navigator.standalone) {
+                    enableFullScreen();
+                }
+            }
+        });
 
         async function fetchTideData() {
             try {
