@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Port Jefferson Tide Data</title>
+    <title>Port Jefferson Data</title>
     <style>
         body {
             font-family: Courier, monospace;
@@ -18,7 +18,7 @@
             min-height: 100vh;
             color: #05204A;
         }
-        .iphone {
+        .app-container {
             background-color: #E8EEF2;
             border-radius: 40px;
             box-shadow: 0 0 20px rgba(5, 32, 74, 0.2);
@@ -34,46 +34,44 @@
             align-items: center;
             padding: 20px;
             box-sizing: border-box;
+            overflow-y: auto;
         }
         .location {
             font-size: 24px;
             font-weight: bold;
             margin-top: env(safe-area-inset-top);
+            margin-bottom: 5px;
+            color: #05204A;
+        }
+        .current-date {
+            font-size: 18px;
             margin-bottom: 20px;
             color: #05204A;
         }
-        .tide-info {
-            background-color: #FFFFFF;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
+        .data-section {
             width: 100%;
-            box-sizing: border-box;
-            text-align: center;
+            margin-bottom: 20px;
         }
-        .tide-info h2 {
+        .data-section h2 {
             font-size: 18px;
             margin: 0 0 10px 0;
-            font-family: Arial, sans-serif;
             color: #05204A;
         }
-        .tide-info p {
-            margin: 5px 0;
-            font-size: 24px;
+        .data-box {
+            background-color: #FFFFFF;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 10px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .data-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        .data-label {
             font-weight: bold;
-        }
-        .current-tide {
-            font-size: 36px;
-            font-weight: bold;
-            text-align: center;
-            margin-bottom: 20px;
-            color: #05204A;
-        }
-        .next-tide {
-            font-size: 24px;
-            text-align: center;
-            margin-bottom: 20px;
-            color: #05204A;
         }
         #loading, #error {
             text-align: center;
@@ -83,57 +81,68 @@
     </style>
 </head>
 <body>
-    <div class="iphone">
+    <div class="app-container">
         <div class="location">Port Jefferson</div>
-        <div id="loading">Loading tide data...</div>
+        <div class="current-date" id="currentDate"></div>
+        <div id="loading">Loading data...</div>
         <div id="error" style="display: none;"></div>
-        <div class="current-tide" id="currentTide"></div>
-        <div class="next-tide" id="nextTide"></div>
-        <div class="tide-info">
-            <h2>Low Tide</h2>
-            <p id="lowTide"></p>
+        <div id="tideInfo" class="data-section" style="display: none;">
+            <h2>Tide Information</h2>
+            <div class="data-box">
+                <div id="currentTide" class="data-item"></div>
+                <div id="nextTide" class="data-item"></div>
+                <div id="lowTide" class="data-item"></div>
+                <div id="highTide" class="data-item"></div>
+            </div>
         </div>
-        <div class="tide-info">
-            <h2>High Tide</h2>
-            <p id="highTide"></p>
+        <div id="sunInfo" class="data-section" style="display: none;">
+            <h2>Sun Information</h2>
+            <div class="data-box">
+                <!-- Sun data will be inserted here -->
+            </div>
+        </div>
+        <div id="moonInfo" class="data-section" style="display: none;">
+            <h2>Moon Information</h2>
+            <div class="data-box">
+                <!-- Moon data will be inserted here -->
+            </div>
         </div>
     </div>
 
     <script>
-        const API_URL = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?date=today&station=8514560&product=predictions&datum=STND&time_zone=lst_ldt&units=english&format=json';
+        const TIDE_API_URL = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?date=today&station=8514560&product=predictions&datum=STND&time_zone=lst_ldt&units=english&format=json';
+        const SUN_MOON_API_URL = 'https://aa.usno.navy.mil/api/rstt/oneday?date=2024-09-09&coords=40.9465,-73.0693&tz=-4&dst=false'; // Replace with actual API endpoint
 
-        // Function to enable full-screen mode
+        // Full-screen and iPhone-related functions (unchanged)
         function enableFullScreen() {
             if (document.documentElement.requestFullscreen) {
                 document.documentElement.requestFullscreen();
-            } else if (document.documentElement.webkitRequestFullscreen) { // Safari
+            } else if (document.documentElement.webkitRequestFullscreen) {
                 document.documentElement.webkitRequestFullscreen();
             }
         }
 
-        // Check if the device is an iPhone
         function isIPhone() {
             return /iPhone/i.test(navigator.userAgent) && !window.MSStream;
         }
 
-        // Event listener for page load
         window.addEventListener('load', () => {
             if (isIPhone()) {
-                // Add to home screen prompt
                 if (!navigator.standalone) {
                     alert("To use this app in full-screen mode, please add it to your home screen.");
                 }
                 
-                // Enable full-screen mode when launched from home screen
                 if (navigator.standalone) {
                     enableFullScreen();
                 }
             }
+            updateCurrentDate();
         });
 
+        // Fetch data functions (unchanged)
         async function fetchTideData() {
             try {
-                const response = await fetch(API_URL);
+                const response = await fetch(TIDE_API_URL);
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
@@ -145,6 +154,21 @@
             }
         }
 
+        async function fetchSunMoonData() {
+            try {
+                const response = await fetch(SUN_MOON_API_URL);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                return data.properties.data;
+            } catch (error) {
+                console.error('Error fetching sun/moon data:', error);
+                throw error;
+            }
+        }
+
+        // Data processing functions (unchanged)
         function findTideExtremes(predictions) {
             let lowTide = { time: null, level: Infinity };
             let highTide = { time: null, level: -Infinity };
@@ -191,18 +215,91 @@
             }
         }
 
-        function formatTime(date) {
+        // Formatting functions
+        function formatTime(dateTimeString) {
+            const date = new Date(dateTimeString);
             return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }
 
         function formatMinutes(milliseconds) {
             const minutes = Math.round(milliseconds / (1000 * 60));
-            const hours = Math.floor(minutes / 60);
-            const remainingMinutes = minutes % 60;
-            return `${hours}h ${remainingMinutes}m`;
+            return `${minutes} minutes`;
         }
 
-        async function updateTideInfo() {
+        function updateCurrentDate() {
+            const now = new Date();
+            const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+            document.getElementById('currentDate').textContent = now.toLocaleDateString(undefined, options);
+        }
+
+        // Update UI functions
+        function updateTideInfo(tideData) {
+            const { lowTide, highTide } = findTideExtremes(tideData);
+            const currentTide = getCurrentTideInfo(tideData);
+            const nextTide = getNextTideEvent(currentTide.time, lowTide, highTide);
+
+            document.getElementById('currentTide').innerHTML = `
+                <span class="data-label">Current Tide:</span>
+                <span>${currentTide.level.toFixed(2)} ft</span>
+            `;
+            document.getElementById('nextTide').innerHTML = `
+                <span class="data-label">${nextTide.event} in:</span>
+                <span>${formatMinutes(nextTide.timeUntil)}</span>
+            `;
+            document.getElementById('lowTide').innerHTML = `
+                <span class="data-label">Low Tide:</span>
+                <span>${formatTime(lowTide.time)} - ${lowTide.level.toFixed(2)} ft</span>
+            `;
+            document.getElementById('highTide').innerHTML = `
+                <span class="data-label">High Tide:</span>
+                <span>${formatTime(highTide.time)} - ${highTide.level.toFixed(2)} ft</span>
+            `;
+
+            document.getElementById('tideInfo').style.display = 'block';
+        }
+
+        function updateSunMoonInfo(sunMoonData) {
+            const sunInfoElement = document.getElementById('sunInfo').querySelector('.data-box');
+            const moonInfoElement = document.getElementById('moonInfo').querySelector('.data-box');
+
+            // Update Sun Information
+            let sunHtml = '';
+            sunMoonData.sundata.forEach(item => {
+                sunHtml += `
+                    <div class="data-item">
+                        <span class="data-label">${item.phen}:</span>
+                        <span>${item.time}</span>
+                    </div>
+                `;
+            });
+            sunInfoElement.innerHTML = sunHtml;
+            document.getElementById('sunInfo').style.display = 'block';
+
+            // Update Moon Information
+            let moonHtml = `
+                <div class="data-item">
+                    <span class="data-label">Phase:</span>
+                    <span>${sunMoonData.curphase}</span>
+                </div>
+                <div class="data-item">
+                    <span class="data-label">Illumination:</span>
+                    <span>${sunMoonData.fracillum}</span>
+                </div>
+            `;
+            sunMoonData.moondata.forEach(item => {
+                moonHtml += `
+                    <div class="data-item">
+                        <span class="data-label">${item.phen}:</span>
+                        <span>${item.time}</span>
+                    </div>
+                `;
+            });
+            moonInfoElement.innerHTML = moonHtml;
+            document.getElementById('moonInfo').style.display = 'block';
+        }
+
+        // Main function to fetch and update all data
+        async function updateAllInfo() {
             const loadingElement = document.getElementById('loading');
             const errorElement = document.getElementById('error');
 
@@ -210,26 +307,25 @@
                 loadingElement.style.display = 'block';
                 errorElement.style.display = 'none';
 
-                const predictions = await fetchTideData();
-                const { lowTide, highTide } = findTideExtremes(predictions);
-                const currentTide = getCurrentTideInfo(predictions);
-                const nextTide = getNextTideEvent(currentTide.time, lowTide, highTide);
+                const [tideData, sunMoonData] = await Promise.all([
+                    fetchTideData(),
+                    fetchSunMoonData()
+                ]);
 
-                document.getElementById('currentTide').textContent = `Current Tide: ${currentTide.level.toFixed(2)} ft`;
-                document.getElementById('nextTide').textContent = `${nextTide.event} in ${formatMinutes(nextTide.timeUntil)}`;
-                document.getElementById('lowTide').textContent = `${formatTime(new Date(lowTide.time))} - ${lowTide.level.toFixed(2)} ft`;
-                document.getElementById('highTide').textContent = `${formatTime(new Date(highTide.time))} - ${highTide.level.toFixed(2)} ft`;
+                updateTideInfo(tideData);
+                updateSunMoonInfo(sunMoonData);
+                updateCurrentDate();
 
                 loadingElement.style.display = 'none';
             } catch (error) {
                 loadingElement.style.display = 'none';
                 errorElement.style.display = 'block';
-                errorElement.textContent = 'Failed to load tide data. Please try again later.';
+                errorElement.textContent = 'Failed to load data. Please try again later.';
             }
         }
 
-        updateTideInfo();
-        setInterval(updateTideInfo, 60000); // Update every minute
+        updateAllInfo();
+        setInterval(updateAllInfo, 60000); // Update every minute
     </script>
 </body>
 </html>
