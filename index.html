@@ -73,10 +73,41 @@
         .data-label {
             font-weight: bold;
         }
+        .tide-info {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+        .tide-main {
+            display: flex;
+            justify-content: space-between;
+        }
+        .tide-height {
+            text-align: right;
+            width: 100%;
+        }
         #loading, #error {
             text-align: center;
             font-size: 18px;
             color: #05204A;
+        }
+        .landscape-time {
+            display: none;
+            font-size: 48px;
+            font-weight: bold;
+            text-align: center;
+        }
+        @media (orientation: landscape) {
+            .app-container > *:not(.landscape-time) {
+                display: none;
+            }
+            .landscape-time {
+                display: block;
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+            }
         }
     </style>
 </head>
@@ -107,13 +138,13 @@
                 <!-- Moon data will be inserted here -->
             </div>
         </div>
+        <div class="landscape-time" id="landscapeTime"></div>
     </div>
 
     <script>
         const TIDE_API_URL = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?date=today&station=8514560&product=predictions&datum=STND&time_zone=lst_ldt&units=english&format=json';
         const SUN_MOON_API_URL = 'https://aa.usno.navy.mil/api/rstt/oneday?date=2024-09-09&coords=40.9465,-73.0693&tz=-4&dst=false'; // Replace with actual API endpoint
 
-        // Full-screen and iPhone-related functions (unchanged)
         function enableFullScreen() {
             if (document.documentElement.requestFullscreen) {
                 document.documentElement.requestFullscreen();
@@ -137,9 +168,9 @@
                 }
             }
             updateCurrentDate();
+            updateLandscapeTime();
         });
 
-        // Fetch data functions (unchanged)
         async function fetchTideData() {
             try {
                 const response = await fetch(TIDE_API_URL);
@@ -168,7 +199,6 @@
             }
         }
 
-        // Data processing functions (unchanged)
         function findTideExtremes(predictions) {
             let lowTide = { time: null, level: Infinity };
             let highTide = { time: null, level: -Infinity };
@@ -215,15 +245,16 @@
             }
         }
 
-        // Formatting functions
         function formatTime(dateTimeString) {
             const date = new Date(dateTimeString);
-            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
         }
 
         function formatMinutes(milliseconds) {
             const minutes = Math.round(milliseconds / (1000 * 60));
-            return `${minutes} minutes`;
+            const hours = Math.floor(minutes / 60);
+            const remainingMinutes = minutes % 60;
+            return `${hours} hours ${remainingMinutes} minutes`;
         }
 
         function updateCurrentDate() {
@@ -232,7 +263,11 @@
             document.getElementById('currentDate').textContent = now.toLocaleDateString(undefined, options);
         }
 
-        // Update UI functions
+        function updateLandscapeTime() {
+            const now = new Date();
+            document.getElementById('landscapeTime').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+        }
+
         function updateTideInfo(tideData) {
             const { lowTide, highTide } = findTideExtremes(tideData);
             const currentTide = getCurrentTideInfo(tideData);
@@ -247,12 +282,22 @@
                 <span>${formatMinutes(nextTide.timeUntil)}</span>
             `;
             document.getElementById('lowTide').innerHTML = `
-                <span class="data-label">Low Tide:</span>
-                <span>${formatTime(lowTide.time)} - ${lowTide.level.toFixed(2)} ft</span>
+                <div class="tide-info">
+                    <div class="tide-main">
+                        <span class="data-label">Low Tide:</span>
+                        <span>${formatTime(lowTide.time)}</span>
+                    </div>
+                    <span class="tide-height">${lowTide.level.toFixed(2)} ft</span>
+                </div>
             `;
             document.getElementById('highTide').innerHTML = `
-                <span class="data-label">High Tide:</span>
-                <span>${formatTime(highTide.time)} - ${highTide.level.toFixed(2)} ft</span>
+                <div class="tide-info">
+                    <div class="tide-main">
+                        <span class="data-label">High Tide:</span>
+                        <span>${formatTime(highTide.time)}</span>
+                    </div>
+                    <span class="tide-height">${highTide.level.toFixed(2)} ft</span>
+                </div>
             `;
 
             document.getElementById('tideInfo').style.display = 'block';
@@ -265,9 +310,13 @@
             // Update Sun Information
             let sunHtml = '';
             sunMoonData.sundata.forEach(item => {
+                let label = item.phen;
+                if (label === 'Begin Civil Twilight') label = 'First Light';
+                if (label === 'Upper Transit') label = 'Midday';
+                if (label === 'End Civil Twilight') label = 'Last Light';
                 sunHtml += `
                     <div class="data-item">
-                        <span class="data-label">${item.phen}:</span>
+                        <span class="data-label">${label}:</span>
                         <span>${item.time}</span>
                     </div>
                 `;
@@ -287,9 +336,11 @@
                 </div>
             `;
             sunMoonData.moondata.forEach(item => {
+                let label = item.phen;
+                if (label === 'Upper Transit') label = 'Zenith';
                 moonHtml += `
                     <div class="data-item">
-                        <span class="data-label">${item.phen}:</span>
+                        <span class="data-label">${label}:</span>
                         <span>${item.time}</span>
                     </div>
                 `;
@@ -298,7 +349,6 @@
             document.getElementById('moonInfo').style.display = 'block';
         }
 
-        // Main function to fetch and update all data
         async function updateAllInfo() {
             const loadingElement = document.getElementById('loading');
             const errorElement = document.getElementById('error');
@@ -315,6 +365,7 @@
                 updateTideInfo(tideData);
                 updateSunMoonInfo(sunMoonData);
                 updateCurrentDate();
+                updateLandscapeTime();
 
                 loadingElement.style.display = 'none';
             } catch (error) {
@@ -326,6 +377,7 @@
 
         updateAllInfo();
         setInterval(updateAllInfo, 60000); // Update every minute
+        setInterval(updateLandscapeTime, 1000); // Update landscape time every second
     </script>
 </body>
 </html>
