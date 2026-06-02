@@ -89,18 +89,47 @@
     </div>
 
     <script>
+        // Port Jefferson is in the US Eastern time zone. Anchoring everything to
+        // this zone keeps the app accurate regardless of where it is viewed and
+        // automatically follows the EST/EDT daylight-savings switch.
+        const TIME_ZONE = 'America/New_York';
+
+        // Eastern Time's current UTC offset in whole hours (-5 during EST, -4
+        // during EDT). Derived from the date so daylight savings is handled for us.
+        function getEasternUtcOffset(date = new Date()) {
+            const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+            const easternDate = new Date(date.toLocaleString('en-US', { timeZone: TIME_ZONE }));
+            return Math.round((easternDate - utcDate) / (1000 * 60 * 60));
+        }
+
+        // Calendar date (YYYY-MM-DD) as it is in Eastern Time, not UTC. Using UTC
+        // here would roll over to "tomorrow" during the evening hours.
+        function getEasternDateString(date = new Date()) {
+            return date.toLocaleDateString('en-CA', { timeZone: TIME_ZONE });
+        }
+
+        // NOAA returns tide times as Eastern wall-clock strings ("YYYY-MM-DD HH:MM")
+        // with no zone marker. Attach the correct Eastern offset so they parse to the
+        // right instant even when the viewing device is in another time zone.
+        function parseEasternDateTime(dateTimeString) {
+            const [datePart, timePart] = dateTimeString.trim().split(/[ T]/);
+            const offset = getEasternUtcOffset(new Date(`${datePart}T12:00:00Z`));
+            const sign = offset >= 0 ? '+' : '-';
+            const pad = String(Math.abs(offset)).padStart(2, '0');
+            return new Date(`${datePart}T${timePart}:00${sign}${pad}:00`);
+        }
+
         function getTodayDate() {
-            return new Date().toISOString().split('T')[0];
+            return getEasternDateString();
         }
 
         function getTomorrowDate() {
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            return tomorrow.toISOString().split('T')[0];
+            return getEasternDateString(new Date(Date.now() + 24 * 60 * 60 * 1000));
         }
 
         function getSunMoonApiUrl() {
-            return `https://aa.usno.navy.mil/api/rstt/oneday?date=${getTodayDate()}&coords=40.9465,-73.0693&tz=-4&dst=false`;
+            const tz = getEasternUtcOffset();
+            return `https://aa.usno.navy.mil/api/rstt/oneday?date=${getTodayDate()}&coords=40.9465,-73.0693&tz=${tz}&dst=false`;
         }
 
         function getTideApiUrl() {
@@ -134,20 +163,20 @@
         }
 
         function updateCurrentDate() {
-            document.getElementById('currentDate').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+            document.getElementById('currentDate').textContent = new Date().toLocaleDateString(undefined, { timeZone: TIME_ZONE, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
         }
 
         function updateLandscapeTime() {
-            document.getElementById('landscapeTime').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+            document.getElementById('landscapeTime').textContent = new Date().toLocaleTimeString([], { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
         }
 
         function formatTideTime(dateTimeString) {
-            return new Date(dateTimeString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+            return parseEasternDateTime(dateTimeString).toLocaleTimeString([], { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false });
         }
 
         function getTimeUntilNextTide(nextTide) {
             const now = new Date();
-            const tideTime = new Date(nextTide.t);
+            const tideTime = parseEasternDateTime(nextTide.t);
             const timeDiff = tideTime - now;
             const hours = Math.floor(timeDiff / (1000 * 60 * 60));
             const minutes = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
@@ -157,10 +186,9 @@
         function updateTideInfo(tideData) {
             const tideInfoElement = document.getElementById('tideInfo').querySelector('.data-box');
             const now = new Date();
-            const today = now.toDateString();
-            const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000).toDateString();
-            
-            let futureTides = tideData.predictions.filter(pred => new Date(pred.t) > now);
+            const tomorrow = getTomorrowDate();
+
+            let futureTides = tideData.predictions.filter(pred => parseEasternDateTime(pred.t) > now);
             let nextTide = futureTides[0];
             
             let tideHTML = `
@@ -171,8 +199,7 @@
             `;
             
             futureTides.slice(0, 4).forEach((tide, index) => {
-                const tideDate = new Date(tide.t);
-                const isTomorrow = tideDate.toDateString() === tomorrow;
+                const isTomorrow = tide.t.trim().split(/[ T]/)[0] === tomorrow;
                 tideHTML += `
                     <div class="data-item">
                         <span class="data-label">${tide.type === 'H' ? 'High' : 'Low'}${isTomorrow ? '*' : ''}</span>
