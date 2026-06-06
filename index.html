@@ -46,10 +46,7 @@
         }
         .data-item { display: flex; justify-content: space-between; margin-bottom: 5px; }
         .data-label { font-weight: bold; }
-        .tide-compare-head { margin-top: 10px; padding-top: 10px; border-top: 1px solid #96ACB7; }
-        .tide-compare { align-items: center; }
-        .tide-time { opacity: 0.7; }
-        .pill { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 12px; font-weight: bold; white-space: nowrap; }
+        .pill { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px; font-weight: bold; white-space: nowrap; }
         .pill.up2 { background: #f2c9c0; color: #7a1f0c; }
         .pill.up1 { background: #f7e0d2; color: #8a4a2c; }
         .pill.mid { background: #d8e0e6; color: #3a4a57; }
@@ -226,44 +223,29 @@
             return { label: '≈ typical', cls: 'mid' };
         }
 
-        // Builds today's daily high and low — each with its clock time and a verdict
-        // — from a year of hi/lo predictions plus the station datums. Returns null
-        // when today's tides can't be determined.
-        function computeTideComparison(statsData, datums) {
-            const preds = (statsData && statsData.predictions) || [];
-            const today = getTodayDate();
-            const highs = [], lows = [], todayHighs = [], todayLows = [];
-            preds.forEach(p => {
-                const v = parseFloat(p.v);
-                if (!isFinite(v)) return;
-                const isToday = p.t.trim().split(/[ T]/)[0] === today;
-                if (p.type === 'H') { highs.push(v); if (isToday) todayHighs.push({ v, t: p.t }); }
-                else if (p.type === 'L') { lows.push(v); if (isToday) todayLows.push({ v, t: p.t }); }
-            });
-            if (!todayHighs.length || !todayLows.length) return null;
-
-            const hi = todayHighs.reduce((a, b) => (b.v > a.v ? b : a));
-            const lo = todayLows.reduce((a, b) => (b.v < a.v ? b : a));
-            return {
-                high: { value: hi.v, time: formatTideTime(hi.t), verdict: classifyTide(hi.v, highs, 'high', datums) },
-                low:  { value: lo.v, time: formatTideTime(lo.t), verdict: classifyTide(lo.v, lows, 'low', datums) }
-            };
-        }
-
-        // Today's comparison, fetching the 12-month predictions and station datums
-        // at most once per day (cached). The datums fetch degrades gracefully so a
-        // datums outage still yields the percentile-only wording.
-        async function getTodayTideComparison() {
-            const key = `tideStats:v2:8514560:${getTodayDate()}`;
+        // The 12-month baseline used to judge how high/low a tide is: every high
+        // and low height from the past year, plus the station datums. Fetched at
+        // most once per day (cached); the datums fetch degrades gracefully so an
+        // outage still yields percentile-based verdicts. Returns null on failure.
+        async function getTideBaseline() {
+            const key = `tideBaseline:8514560:${getTodayDate()}`;
             const cached = cacheGet(key);
             if (cached) return cached;
             const [statsData, datums] = await Promise.all([
                 fetchData(getTideStatsApiUrl()),
                 getStationDatums().catch(() => null)
             ]);
-            const result = computeTideComparison(statsData, datums);
-            if (result) cacheSet(key, result);
-            return result;
+            const highs = [], lows = [];
+            ((statsData && statsData.predictions) || []).forEach(p => {
+                const v = parseFloat(p.v);
+                if (!isFinite(v)) return;
+                if (p.type === 'H') highs.push(v);
+                else if (p.type === 'L') lows.push(v);
+            });
+            if (!highs.length || !lows.length) return null;
+            const baseline = { highs, lows, datums };
+            cacheSet(key, baseline);
+            return baseline;
         }
 
         function enableFullScreen() {
@@ -311,46 +293,57 @@
             return `${hours} hours ${minutes} minutes`;
         }
 
-        function updateTideInfo(tideData, comparison) {
+        function updateTideInfo(tideData, baseline) {
             const tideInfoElement = document.getElementById('tideInfo').querySelector('.data-box');
             const now = new Date();
             const tomorrow = getTomorrowDate();
+            const preds = tideData.predictions;
 
-            let futureTides = tideData.predictions.filter(pred => parseEasternDateTime(pred.t) > now);
+            // The single highest high and lowest low of each calendar day, so those
+            // rows can be flagged inline with how they compare to a typical year.
+            const dayExtremes = {};
+            preds.forEach(p => {
+                const day = p.t.trim().split(/[ T]/)[0];
+                const e = dayExtremes[day] || (dayExtremes[day] = {});
+                const v = parseFloat(p.v);
+                if (p.type === 'H') { if (!e.high || v > parseFloat(e.high.v)) e.high = p; }
+                else if (p.type === 'L') { if (!e.low || v < parseFloat(e.low.v)) e.low = p; }
+            });
+
+            let futureTides = preds.filter(pred => parseEasternDateTime(pred.t) > now);
             let nextTide = futureTides[0];
-            
+
             let tideHTML = `
                 <div class="data-item">
                     <span class="data-label">${nextTide.type === 'H' ? 'High' : 'Low'} tide in:</span>
                     <span>${getTimeUntilNextTide(nextTide)}</span>
                 </div>
             `;
-            
-            futureTides.slice(0, 4).forEach((tide, index) => {
-                const isTomorrow = tide.t.trim().split(/[ T]/)[0] === tomorrow;
+
+            futureTides.slice(0, 4).forEach((tide) => {
+                const day = tide.t.trim().split(/[ T]/)[0];
+                const isTomorrow = day === tomorrow;
+                const e = dayExtremes[day] || {};
+
+                // Flag a row only when it is its day's highest high or lowest low.
+                let pill = '';
+                if (baseline) {
+                    if (tide.type === 'H' && e.high && e.high.t === tide.t) {
+                        const verdict = classifyTide(parseFloat(tide.v), baseline.highs, 'high', baseline.datums);
+                        pill = ` <span class="pill ${verdict.cls}">${verdict.label}</span>`;
+                    } else if (tide.type === 'L' && e.low && e.low.t === tide.t) {
+                        const verdict = classifyTide(parseFloat(tide.v), baseline.lows, 'low', baseline.datums);
+                        pill = ` <span class="pill ${verdict.cls}">${verdict.label}</span>`;
+                    }
+                }
+
                 tideHTML += `
                     <div class="data-item">
                         <span class="data-label">${tide.type === 'H' ? 'High' : 'Low'}${isTomorrow ? '*' : ''}</span>
-                        <span>(${parseFloat(tide.v).toFixed(2)}) ${formatTideTime(tide.t)}</span>
+                        <span>(${parseFloat(tide.v).toFixed(2)}) ${formatTideTime(tide.t)}${pill}</span>
                     </div>
                 `;
             });
-
-            if (comparison) {
-                const compareRow = (label, c) => `
-                    <div class="data-item tide-compare">
-                        <span>${label} ${c.value.toFixed(2)} ft <span class="tide-time">· ${c.time}</span></span>
-                        <span class="pill ${c.verdict.cls}">${c.verdict.label}</span>
-                    </div>
-                `;
-                tideHTML += `
-                    <div class="data-item tide-compare-head">
-                        <span class="data-label">Today vs. typical</span>
-                    </div>
-                    ${compareRow('High', comparison.high)}
-                    ${compareRow('Low', comparison.low)}
-                `;
-            }
 
             tideInfoElement.innerHTML = tideHTML;
             document.getElementById('tideInfo').style.display = 'block';
@@ -402,13 +395,13 @@
                 loadingElement.style.display = 'block';
                 errorElement.style.display = 'none';
 
-                const [sunMoonData, tideData, comparison] = await Promise.all([
+                const [sunMoonData, tideData, baseline] = await Promise.all([
                     fetchData(getSunMoonApiUrl()).then(data => data.properties.data),
                     fetchData(getTideApiUrl()),
-                    getTodayTideComparison().catch(() => null)
+                    getTideBaseline().catch(() => null)
                 ]);
 
-                updateTideInfo(tideData, comparison);
+                updateTideInfo(tideData, baseline);
                 updateSunMoonInfo(sunMoonData);
                 updateCurrentDate();
                 updateLandscapeTime();
