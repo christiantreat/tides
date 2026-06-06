@@ -207,20 +207,25 @@
         }
 
         // Classifies a tide height against the past year's distribution of that
-        // tide type (and the astronomical extreme from the datums) into a verdict
-        // describing how high/low the water is. The same scale is used for the
-        // daily high and the daily low — blue = lower water, red = higher water.
+        // tide type (and the astronomical extreme from the datums). Arrows track
+        // the water level versus a normal tide of that type — both for highs and
+        // lows — so a deep low reads ↓↓ and a barely-there low reads ↑↑. Colour
+        // matches: blue = lower water, red = higher water.
         function classifyTide(value, arr, kind, datums) {
             const pct = percentileOf(value, arr);
             const nearTop = datums && kind === 'high' && isFinite(datums.ceiling) && Math.abs(value - datums.ceiling) <= 0.5;
             const nearBottom = datums && kind === 'low' && isFinite(datums.floor) && Math.abs(value - datums.floor) <= 0.5;
 
-            if (nearTop || (pct !== null && pct >= 90)) return { label: '↑ very high', cls: 'up2' };
-            if (nearBottom || (pct !== null && pct <= 10)) return { label: '↓ very low', cls: 'down2' };
-            if (pct === null) return { label: '≈ typical', cls: 'mid' };
-            if (pct >= 67) return { label: 'above avg', cls: 'up1' };
-            if (pct <= 33) return { label: 'below avg', cls: 'down1' };
-            return { label: '≈ typical', cls: 'mid' };
+            let cls;
+            if (nearTop || (pct !== null && pct >= 90)) cls = 'up2';
+            else if (nearBottom || (pct !== null && pct <= 10)) cls = 'down2';
+            else if (pct === null) cls = 'mid';
+            else if (pct >= 67) cls = 'up1';
+            else if (pct <= 33) cls = 'down1';
+            else cls = 'mid';
+
+            const labels = { up2: '↑↑', up1: '↑', mid: '≈', down1: '↓', down2: '↓↓' };
+            return { label: labels[cls], cls };
         }
 
         // The 12-month baseline used to judge how high/low a tide is: every high
