@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Port Jefferson Data</title>
+    <title>Old Field Club Data</title>
     <style>
         body {
             font-family: Courier, monospace;
@@ -33,7 +33,11 @@
             overflow-y: auto;
         }
         .location { font-size: 24px; font-weight: bold; margin-top: env(safe-area-inset-top); }
-        .current-date { font-size: 18px; margin-bottom: 20px; }
+        .subtitle { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+        .current-date { font-size: 18px; margin-top: 6px; margin-bottom: 20px; }
+        .note { font-size: 11px; opacity: 0.65; }
+        .tide-wave { width: 100%; margin: 8px 0 4px; line-height: 0; }
+        .tide-wave svg { width: 100%; height: auto; display: block; }
         .data-section { width: 100%; margin-bottom: 20px; }
         .data-section h2 { font-size: 18px; margin: 0 0 10px; }
         .data-box {
@@ -75,12 +79,17 @@
 </head>
 <body>
     <div class="app-container">
-        <div class="location">Port Jefferson</div>
+        <div class="location">Old Field Club</div>
+        <div class="subtitle">Estimated tide &middot; interpolated from Port Jefferson &amp; Northport</div>
         <div class="current-date" id="currentDate"></div>
         <div id="loading">Loading data...</div>
         <div id="error" style="display: none;"></div>
         <div id="tideInfo" class="data-section" style="display: none;">
             <h2>Tide Information</h2>
+            <div class="data-box"></div>
+        </div>
+        <div id="waterTempInfo" class="data-section" style="display: none;">
+            <h2>Water Temperature</h2>
             <div class="data-box"></div>
         </div>
         <div id="sunInfo" class="data-section" style="display: none;">
@@ -99,6 +108,21 @@
         // this zone keeps the app accurate regardless of where it is viewed and
         // automatically follows the EST/EDT daylight-savings switch.
         const TIME_ZONE = 'America/New_York';
+
+        // NOAA has no tide station at the Old Field Club (86 West Meadow Road, on
+        // Smithtown Bay). We estimate its tide by linearly interpolating between the
+        // two nearest reference stations that bracket it along the shore — Port
+        // Jefferson to the east and Northport Bay to the west — by longitude. This
+        // is a first-order estimate (the same idea NOAA's subordinate-station time/
+        // height offsets encode), not an official prediction, hence "Estimated".
+        const TARGET = { name: 'Old Field Club', lat: 40.943, lon: -73.146 };
+        const EAST = { id: '8514560', name: 'Port Jefferson', lon: -73.0767 };
+        const WEST = { id: '8515586', name: 'Northport', lon: -73.3533 };
+        const TEMP_STATION = { id: '8467150', name: 'Bridgeport, CT' };
+
+        // Blend weight toward the west anchor (0 = Port Jefferson, 1 = Northport),
+        // from where the target sits between the two stations' longitudes (~0.25).
+        const W = (TARGET.lon - EAST.lon) / (WEST.lon - EAST.lon);
 
         // Eastern Time's current UTC offset in whole hours (-5 during EST, -4
         // during EDT). Derived from the date so daylight savings is handled for us.
@@ -135,27 +159,34 @@
 
         function getSunMoonApiUrl() {
             const tz = getEasternUtcOffset();
-            return `https://aa.usno.navy.mil/api/rstt/oneday?date=${getTodayDate()}&coords=40.9465,-73.0693&tz=${tz}&dst=false`;
+            return `https://aa.usno.navy.mil/api/rstt/oneday?date=${getTodayDate()}&coords=${TARGET.lat},${TARGET.lon}&tz=${tz}&dst=false`;
         }
 
-        function getTideApiUrl() {
+        function getTideApiUrl(stationId) {
             const beginDate = getTodayDate().replace(/-/g, '');
             const endDate = getTomorrowDate().replace(/-/g, '');
-            return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=8514560&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
+            return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=${stationId}&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
+        }
+
+        // Latest water-temperature observation. There is no sensor at the target;
+        // the nearest reporting station is Bridgeport, CT across the Sound, so the
+        // reading is labeled with its source rather than presented as local.
+        function getWaterTempUrl(stationId) {
+            return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=water_temperature&application=NOS.COOPS.TAC.WL&date=latest&station=${stationId}&time_zone=lst_ldt&units=english&format=json`;
         }
 
         // --- Today vs. typical comparison ------------------------------------
 
-        function getDatumsApiUrl() {
-            return 'https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/8514560/datums.json';
+        function getDatumsApiUrl(stationId) {
+            return `https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/${stationId}/datums.json`;
         }
 
         // A full year of high/low predictions, ending today, for the 12-month
         // percentile. Same URL shape as getTideApiUrl, just a wider date range.
-        function getTideStatsApiUrl() {
+        function getTideStatsApiUrl(stationId) {
             const beginDate = getEasternDateString(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)).replace(/-/g, '');
             const endDate = getTodayDate().replace(/-/g, '');
-            return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=8514560&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
+            return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=${stationId}&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
         }
 
         // Small persistent cache (localStorage) with an in-memory fallback for
@@ -177,13 +208,13 @@
         // extremes) only change once per ~19-year epoch, so they are cached for a
         // long time. They are reported on the station datum; we convert to the MLLW
         // reference the predictions use so they line up with predicted heights.
-        async function getStationDatums() {
-            const key = 'tideDatums:8514560';
+        async function getStationDatums(stationId) {
+            const key = `tideDatums:${stationId}`;
             const cached = cacheGet(key);
             if (cached && (Date.now() - cached.fetchedAt) < 30 * 24 * 60 * 60 * 1000) {
                 return cached.datums;
             }
-            const data = await fetchData(getDatumsApiUrl());
+            const data = await fetchData(getDatumsApiUrl(stationId));
             const byName = {};
             (data.datums || []).forEach(d => { byName[d.name] = parseFloat(d.value); });
             const mllw = byName.MLLW;
@@ -232,13 +263,13 @@
         // and low height from the past year, plus the station datums. Fetched at
         // most once per day (cached); the datums fetch degrades gracefully so an
         // outage still yields percentile-based verdicts. Returns null on failure.
-        async function getTideBaseline() {
-            const key = `tideBaseline:8514560:${getTodayDate()}`;
+        async function getTideBaseline(stationId) {
+            const key = `tideBaseline:${stationId}:${getTodayDate()}`;
             const cached = cacheGet(key);
             if (cached) return cached;
             const [statsData, datums] = await Promise.all([
-                fetchData(getTideStatsApiUrl()),
-                getStationDatums().catch(() => null)
+                fetchData(getTideStatsApiUrl(stationId)),
+                getStationDatums(stationId).catch(() => null)
             ]);
             const highs = [], lows = [];
             ((statsData && statsData.predictions) || []).forEach(p => {
@@ -251,6 +282,129 @@
             const baseline = { highs, lows, datums };
             cacheSet(key, baseline);
             return baseline;
+        }
+
+        // Eastern wall-clock stamp ("YYYY-MM-DD HH:MM") for a Date, matching the
+        // format NOAA returns so the interpolated events flow through the same
+        // parseEasternDateTime / formatTideTime / day-extreme code as raw ones.
+        function toEasternStamp(date) {
+            const d = date.toLocaleDateString('en-CA', { timeZone: TIME_ZONE });
+            const t = date.toLocaleTimeString('en-GB', { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false });
+            return `${d} ${t}`;
+        }
+
+        // Estimate the target's high/low tides by interpolating between the two
+        // anchor stations. Each east (Port Jefferson) event is matched to the
+        // nearest same-type west (Northport) event within 3h, then both its time and
+        // height are blended by weight w (0 = east, 1 = west). An east event with no
+        // nearby west match is dropped rather than reported unblended.
+        function estimateTides(eastPreds, westPreds, w) {
+            const west = (westPreds || []).map(p => ({
+                type: p.type, ms: parseEasternDateTime(p.t).getTime(), v: parseFloat(p.v)
+            }));
+            const out = [];
+            (eastPreds || []).forEach(pe => {
+                const me = parseEasternDateTime(pe.t).getTime();
+                const ve = parseFloat(pe.v);
+                if (!isFinite(me) || !isFinite(ve)) return;
+                let best = null, bestDiff = Infinity;
+                west.forEach(pw => {
+                    if (pw.type !== pe.type) return;
+                    const diff = Math.abs(pw.ms - me);
+                    if (diff < bestDiff) { bestDiff = diff; best = pw; }
+                });
+                if (!best || bestDiff > 3 * 60 * 60 * 1000) return;
+                const ms = me + w * (best.ms - me);
+                const v = ve + w * (best.v - ve);
+                out.push({ t: toEasternStamp(new Date(ms)), v: v.toFixed(3), type: pe.type });
+            });
+            out.sort((a, b) => parseEasternDateTime(a.t) - parseEasternDateTime(b.t));
+            return { predictions: out };
+        }
+
+        // Blend two stations' datums for the target point. If only one side is
+        // available it is used as-is; if neither is, returns null (the verdict then
+        // falls back to percentile-only, which classifyTide already handles).
+        function interpDatums(dE, dW, w) {
+            if (!dE && !dW) return null;
+            if (!dE) return dW;
+            if (!dW) return dE;
+            const blend = (a, b) => (isFinite(a) && isFinite(b)) ? a + w * (b - a) : (isFinite(a) ? a : b);
+            return {
+                avgHigh: blend(dE.avgHigh, dW.avgHigh),
+                avgLow: blend(dE.avgLow, dW.avgLow),
+                ceiling: blend(dE.ceiling, dW.ceiling),
+                floor: blend(dE.floor, dW.floor)
+            };
+        }
+
+        // Between two consecutive high/low events the tide is well approximated by
+        // a half-cosine; f in [0,1] is the fraction of time elapsed from v0 to v1.
+        function tideHeightBetween(v0, v1, f) {
+            return v0 + (v1 - v0) * (1 - Math.cos(Math.PI * f)) / 2;
+        }
+
+        // A compact horizontal SVG of the tide curve around "now", drawn from the
+        // estimated hi/lo predictions (same data as the list) so the shape and the
+        // current-position dot line up with the numbers. Returns '' if there isn't
+        // enough data to draw, so the caller can simply omit it.
+        function buildTideWaveSvg(preds, now) {
+            if (!preds || preds.length < 2) return '';
+            const ev = preds.map(p => ({ ms: parseEasternDateTime(p.t).getTime(), v: parseFloat(p.v) }))
+                            .filter(e => isFinite(e.ms) && isFinite(e.v));
+            if (ev.length < 2) return '';
+            const nowMs = now.getTime();
+
+            // Window: the current cycle plus what's next (prev event + ~3 ahead).
+            let idxNext = ev.findIndex(e => e.ms > nowMs);
+            if (idxNext === -1) idxNext = ev.length;          // now after last event
+            const start = Math.max(0, idxNext - 1);
+            const end = Math.min(ev.length - 1, idxNext + 3);
+            const win = ev.slice(start, end + 1);
+            if (win.length < 2) return '';
+
+            const W = 320, H = 46, padX = 4, padTop = 7, padBot = 7;
+            const t0 = win[0].ms, t1 = win[win.length - 1].ms;
+            const span = t1 - t0 || 1;
+            const heights = win.map(e => e.v);
+            let yMin = Math.min(...heights), yMax = Math.max(...heights);
+            const pad = (yMax - yMin) * 0.08 || 0.5;
+            yMin -= pad; yMax += pad;
+            const xOf = ms => padX + ((ms - t0) / span) * (W - 2 * padX);
+            const yOf = v => padTop + (1 - (v - yMin) / (yMax - yMin)) * (H - padTop - padBot);
+
+            // Sample each segment with a half-cosine for a smooth tide curve.
+            const pts = [];
+            for (let i = 0; i < win.length - 1; i++) {
+                const a = win[i], b = win[i + 1], steps = 16;
+                for (let s = 0; s <= steps; s++) {
+                    if (i > 0 && s === 0) continue;            // avoid duplicate join points
+                    const f = s / steps;
+                    pts.push([xOf(a.ms + f * (b.ms - a.ms)), yOf(tideHeightBetween(a.v, b.v, f))]);
+                }
+            }
+            const line = pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+            const area = `${padX},${H - padBot} ${line} ${(W - padX)},${H - padBot}`;
+
+            // Current position: clamp to the window edges if now sits outside it.
+            const nowClamped = Math.min(Math.max(nowMs, t0), t1);
+            let dotV;
+            if (idxNext <= 0) dotV = win[0].v;
+            else if (idxNext >= ev.length) dotV = win[win.length - 1].v;
+            else {
+                const a = ev[idxNext - 1], b = ev[idxNext];
+                dotV = tideHeightBetween(a.v, b.v, (nowMs - a.ms) / (b.ms - a.ms || 1));
+            }
+            const dx = xOf(nowClamped), dy = yOf(dotV);
+
+            return `
+                <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Current tide position">
+                    <polygon points="${area}" fill="#96ACB7" fill-opacity="0.25" stroke="none"/>
+                    <polyline points="${line}" fill="none" stroke="#05204A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <line x1="${dx.toFixed(1)}" y1="${padTop - 3}" x2="${dx.toFixed(1)}" y2="${H - padBot}" stroke="#05204A" stroke-width="0.75" stroke-opacity="0.4"/>
+                    <circle cx="${dx.toFixed(1)}" cy="${dy.toFixed(1)}" r="4" fill="#05204A"/>
+                </svg>
+            `;
         }
 
         function enableFullScreen() {
@@ -325,6 +479,9 @@
                 </div>
             `;
 
+            const wave = buildTideWaveSvg(preds, now);
+            if (wave) tideHTML += `<div class="tide-wave">${wave}</div>`;
+
             futureTides.slice(0, 4).forEach((tide) => {
                 const day = tide.t.trim().split(/[ T]/)[0];
                 const isTomorrow = day === tomorrow;
@@ -350,8 +507,31 @@
                 `;
             });
 
+            tideHTML += `
+                <div class="data-item note">
+                    <span>heights &amp; times estimated for this location${preds.some(p => p.t.trim().split(/[ T]/)[0] === tomorrow) ? ' &middot; * = tomorrow' : ''}</span>
+                </div>
+            `;
+
             tideInfoElement.innerHTML = tideHTML;
             document.getElementById('tideInfo').style.display = 'block';
+        }
+
+        function updateWaterTempInfo(tempData, sourceName) {
+            const section = document.getElementById('waterTempInfo');
+            const reading = tempData && tempData.data && tempData.data[0];
+            const v = reading ? parseFloat(reading.v) : NaN;
+            if (!isFinite(v)) { section.style.display = 'none'; return; }
+            section.querySelector('.data-box').innerHTML = `
+                <div class="data-item">
+                    <span class="data-label">Water temp:</span>
+                    <span>${v.toFixed(1)}&deg;F</span>
+                </div>
+                <div class="data-item note">
+                    <span>source: ${sourceName}</span>
+                </div>
+            `;
+            section.style.display = 'block';
         }
 
         function updateSunMoonInfo(sunMoonData) {
@@ -400,13 +580,22 @@
                 loadingElement.style.display = 'block';
                 errorElement.style.display = 'none';
 
-                const [sunMoonData, tideData, baseline] = await Promise.all([
+                const [sunMoonData, eastTide, westTide, tempData, pjBaseline, npDatums] = await Promise.all([
                     fetchData(getSunMoonApiUrl()).then(data => data.properties.data),
-                    fetchData(getTideApiUrl()),
-                    getTideBaseline().catch(() => null)
+                    fetchData(getTideApiUrl(EAST.id)),
+                    fetchData(getTideApiUrl(WEST.id)),
+                    fetchData(getWaterTempUrl(TEMP_STATION.id)).catch(() => null),
+                    getTideBaseline(EAST.id).catch(() => null),
+                    getStationDatums(WEST.id).catch(() => null)
                 ]);
 
-                updateTideInfo(tideData, baseline);
+                const estimated = estimateTides(eastTide.predictions, westTide.predictions, W);
+                const baseline = pjBaseline
+                    ? { highs: pjBaseline.highs, lows: pjBaseline.lows, datums: interpDatums(pjBaseline.datums, npDatums, W) }
+                    : null;
+
+                updateTideInfo(estimated, baseline);
+                updateWaterTempInfo(tempData, TEMP_STATION.name);
                 updateSunMoonInfo(sunMoonData);
                 updateCurrentDate();
                 updateLandscapeTime();
