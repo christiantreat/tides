@@ -5,7 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Old Field Club Data</title>
+    <!-- Home-screen / installed-app branding. "Tide · OFC" leads with "Tide" so it
+         surfaces when searching the phone. apple-mobile-web-app-title sets the iOS
+         home-screen label; the manifest sets it on Android/Chrome. -->
+    <meta name="apple-mobile-web-app-title" content="Tide · OFC">
+    <meta name="theme-color" content="#05204A">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+    <title>Tide · OFC</title>
     <style>
         body {
             font-family: Courier, monospace;
