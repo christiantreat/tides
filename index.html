@@ -46,6 +46,8 @@
         }
         .data-item { display: flex; justify-content: space-between; margin-bottom: 5px; }
         .data-label { font-weight: bold; }
+        .tide-compare-head { margin-top: 10px; padding-top: 10px; border-top: 1px solid #96ACB7; }
+        .tide-compare { display: block; line-height: 1.4; }
         #loading, #error { text-align: center; font-size: 18px; }
         .landscape-time {
             display: none;
@@ -138,6 +140,137 @@
             return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=8514560&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
         }
 
+        // --- Today vs. typical comparison ------------------------------------
+
+        function getDatumsApiUrl() {
+            return 'https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/8514560/datums.json';
+        }
+
+        // A full year of high/low predictions, ending today, for the 12-month
+        // percentile. Same URL shape as getTideApiUrl, just a wider date range.
+        function getTideStatsApiUrl() {
+            const beginDate = getEasternDateString(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)).replace(/-/g, '');
+            const endDate = getTodayDate().replace(/-/g, '');
+            return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=8514560&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
+        }
+
+        // Small persistent cache (localStorage) with an in-memory fallback for
+        // browsers that block storage, e.g. private mode. Values use JSON.
+        const memoryCache = {};
+        function cacheGet(key) {
+            try {
+                const raw = localStorage.getItem(key);
+                if (raw !== null) return JSON.parse(raw);
+            } catch (e) { /* storage unavailable */ }
+            return key in memoryCache ? memoryCache[key] : null;
+        }
+        function cacheSet(key, value) {
+            memoryCache[key] = value;
+            try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* ignore */ }
+        }
+
+        // NOAA's published tidal datums (long-term averages and astronomical
+        // extremes) only change once per ~19-year epoch, so they are cached for a
+        // long time. They are reported on the station datum; we convert to the MLLW
+        // reference the predictions use so they line up with predicted heights.
+        async function getStationDatums() {
+            const key = 'tideDatums:8514560';
+            const cached = cacheGet(key);
+            if (cached && (Date.now() - cached.fetchedAt) < 30 * 24 * 60 * 60 * 1000) {
+                return cached.datums;
+            }
+            const data = await fetchData(getDatumsApiUrl());
+            const byName = {};
+            (data.datums || []).forEach(d => { byName[d.name] = parseFloat(d.value); });
+            const mllw = byName.MLLW;
+            if (!isFinite(mllw)) throw new Error('Datums missing MLLW');
+            const toMllw = stnd => parseFloat(stnd) - mllw;
+            const datums = {
+                avgHigh: toMllw(byName.MHHW),   // mean higher-high water = average high tide
+                avgLow: 0,                       // MLLW is the prediction baseline (average low tide)
+                ceiling: toMllw(data.HAT),       // highest astronomical tide
+                floor: toMllw(data.LAT)          // lowest astronomical tide
+            };
+            cacheSet(key, { fetchedAt: Date.now(), datums });
+            return datums;
+        }
+
+        // Percentage of values in arr strictly less than value (0-100), or null.
+        function percentileOf(value, arr) {
+            if (!arr.length) return null;
+            const below = arr.reduce((n, v) => n + (v < value ? 1 : 0), 0);
+            return Math.round((below / arr.length) * 100);
+        }
+
+        // Shared wording for the high and low lines: height, delta vs. the
+        // long-term average (MHHW/MLLW), 12-month percentile, and a near-extreme
+        // flag (HAT/LAT).
+        function formatComparisonLine(kind, value, arr, datums) {
+            const parts = [`${value.toFixed(2)} ft`];
+
+            if (datums) {
+                const avg = kind === 'high' ? datums.avgHigh : datums.avgLow;
+                if (isFinite(avg)) {
+                    const delta = value - avg;
+                    const dir = delta >= 0 ? 'above' : 'below';
+                    parts.push(`${Math.abs(delta).toFixed(1)} ft ${dir} average`);
+                }
+            }
+
+            const pct = percentileOf(value, arr);
+            if (pct !== null) {
+                parts.push(kind === 'high'
+                    ? `higher than ${pct}% of the past year's high tides`
+                    : `lower than ${100 - pct}% of the past year's low tides`);
+            }
+
+            if (datums) {
+                const extreme = kind === 'high' ? datums.ceiling : datums.floor;
+                if (isFinite(extreme) && Math.abs(value - extreme) <= 0.5) {
+                    parts.push(kind === 'high' ? 'near the yearly maximum' : 'near the yearly minimum');
+                }
+            }
+
+            return parts.join(' — ');
+        }
+
+        // Builds today's { highText, lowText } from a year of hi/lo predictions plus
+        // the station datums. Returns null when today's tides can't be determined.
+        function computeTideComparison(statsData, datums) {
+            const preds = (statsData && statsData.predictions) || [];
+            const today = getTodayDate();
+            const highs = [], lows = [], todayHighs = [], todayLows = [];
+            preds.forEach(p => {
+                const v = parseFloat(p.v);
+                if (!isFinite(v)) return;
+                const isToday = p.t.trim().split(/[ T]/)[0] === today;
+                if (p.type === 'H') { highs.push(v); if (isToday) todayHighs.push(v); }
+                else if (p.type === 'L') { lows.push(v); if (isToday) todayLows.push(v); }
+            });
+            if (!todayHighs.length || !todayLows.length) return null;
+
+            return {
+                highText: formatComparisonLine('high', Math.max(...todayHighs), highs, datums),
+                lowText: formatComparisonLine('low', Math.min(...todayLows), lows, datums)
+            };
+        }
+
+        // Today's comparison, fetching the 12-month predictions and station datums
+        // at most once per day (cached). The datums fetch degrades gracefully so a
+        // datums outage still yields the percentile-only wording.
+        async function getTodayTideComparison() {
+            const key = `tideStats:8514560:${getTodayDate()}`;
+            const cached = cacheGet(key);
+            if (cached) return cached;
+            const [statsData, datums] = await Promise.all([
+                fetchData(getTideStatsApiUrl()),
+                getStationDatums().catch(() => null)
+            ]);
+            const result = computeTideComparison(statsData, datums);
+            if (result) cacheSet(key, result);
+            return result;
+        }
+
         function enableFullScreen() {
             const elem = document.documentElement;
             (elem.requestFullscreen || elem.webkitRequestFullscreen).call(elem);
@@ -183,7 +316,7 @@
             return `${hours} hours ${minutes} minutes`;
         }
 
-        function updateTideInfo(tideData) {
+        function updateTideInfo(tideData, comparison) {
             const tideInfoElement = document.getElementById('tideInfo').querySelector('.data-box');
             const now = new Date();
             const tomorrow = getTomorrowDate();
@@ -207,7 +340,17 @@
                     </div>
                 `;
             });
-            
+
+            if (comparison) {
+                tideHTML += `
+                    <div class="data-item tide-compare-head">
+                        <span class="data-label">Today vs. typical</span>
+                    </div>
+                    <div class="data-item tide-compare"><span>High: ${comparison.highText}</span></div>
+                    <div class="data-item tide-compare"><span>Low: ${comparison.lowText}</span></div>
+                `;
+            }
+
             tideInfoElement.innerHTML = tideHTML;
             document.getElementById('tideInfo').style.display = 'block';
         }
@@ -258,12 +401,13 @@
                 loadingElement.style.display = 'block';
                 errorElement.style.display = 'none';
 
-                const [sunMoonData, tideData] = await Promise.all([
+                const [sunMoonData, tideData, comparison] = await Promise.all([
                     fetchData(getSunMoonApiUrl()).then(data => data.properties.data),
-                    fetchData(getTideApiUrl())
+                    fetchData(getTideApiUrl()),
+                    getTodayTideComparison().catch(() => null)
                 ]);
 
-                updateTideInfo(tideData);
+                updateTideInfo(tideData, comparison);
                 updateSunMoonInfo(sunMoonData);
                 updateCurrentDate();
                 updateLandscapeTime();
