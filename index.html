@@ -36,6 +36,8 @@
         .subtitle { font-size: 12px; opacity: 0.7; margin-top: 2px; }
         .current-date { font-size: 18px; margin-top: 6px; margin-bottom: 20px; }
         .note { font-size: 11px; opacity: 0.65; }
+        .tide-wave { width: 100%; margin: 8px 0 4px; line-height: 0; }
+        .tide-wave svg { width: 100%; height: auto; display: block; }
         .data-section { width: 100%; margin-bottom: 20px; }
         .data-section h2 { font-size: 18px; margin: 0 0 10px; }
         .data-box {
@@ -336,6 +338,75 @@
             };
         }
 
+        // Between two consecutive high/low events the tide is well approximated by
+        // a half-cosine; f in [0,1] is the fraction of time elapsed from v0 to v1.
+        function tideHeightBetween(v0, v1, f) {
+            return v0 + (v1 - v0) * (1 - Math.cos(Math.PI * f)) / 2;
+        }
+
+        // A compact horizontal SVG of the tide curve around "now", drawn from the
+        // estimated hi/lo predictions (same data as the list) so the shape and the
+        // current-position dot line up with the numbers. Returns '' if there isn't
+        // enough data to draw, so the caller can simply omit it.
+        function buildTideWaveSvg(preds, now) {
+            if (!preds || preds.length < 2) return '';
+            const ev = preds.map(p => ({ ms: parseEasternDateTime(p.t).getTime(), v: parseFloat(p.v) }))
+                            .filter(e => isFinite(e.ms) && isFinite(e.v));
+            if (ev.length < 2) return '';
+            const nowMs = now.getTime();
+
+            // Window: the current cycle plus what's next (prev event + ~3 ahead).
+            let idxNext = ev.findIndex(e => e.ms > nowMs);
+            if (idxNext === -1) idxNext = ev.length;          // now after last event
+            const start = Math.max(0, idxNext - 1);
+            const end = Math.min(ev.length - 1, idxNext + 3);
+            const win = ev.slice(start, end + 1);
+            if (win.length < 2) return '';
+
+            const W = 320, H = 46, padX = 4, padTop = 7, padBot = 7;
+            const t0 = win[0].ms, t1 = win[win.length - 1].ms;
+            const span = t1 - t0 || 1;
+            const heights = win.map(e => e.v);
+            let yMin = Math.min(...heights), yMax = Math.max(...heights);
+            const pad = (yMax - yMin) * 0.08 || 0.5;
+            yMin -= pad; yMax += pad;
+            const xOf = ms => padX + ((ms - t0) / span) * (W - 2 * padX);
+            const yOf = v => padTop + (1 - (v - yMin) / (yMax - yMin)) * (H - padTop - padBot);
+
+            // Sample each segment with a half-cosine for a smooth tide curve.
+            const pts = [];
+            for (let i = 0; i < win.length - 1; i++) {
+                const a = win[i], b = win[i + 1], steps = 16;
+                for (let s = 0; s <= steps; s++) {
+                    if (i > 0 && s === 0) continue;            // avoid duplicate join points
+                    const f = s / steps;
+                    pts.push([xOf(a.ms + f * (b.ms - a.ms)), yOf(tideHeightBetween(a.v, b.v, f))]);
+                }
+            }
+            const line = pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+            const area = `${padX},${H - padBot} ${line} ${(W - padX)},${H - padBot}`;
+
+            // Current position: clamp to the window edges if now sits outside it.
+            const nowClamped = Math.min(Math.max(nowMs, t0), t1);
+            let dotV;
+            if (idxNext <= 0) dotV = win[0].v;
+            else if (idxNext >= ev.length) dotV = win[win.length - 1].v;
+            else {
+                const a = ev[idxNext - 1], b = ev[idxNext];
+                dotV = tideHeightBetween(a.v, b.v, (nowMs - a.ms) / (b.ms - a.ms || 1));
+            }
+            const dx = xOf(nowClamped), dy = yOf(dotV);
+
+            return `
+                <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Current tide position">
+                    <polygon points="${area}" fill="#96ACB7" fill-opacity="0.25" stroke="none"/>
+                    <polyline points="${line}" fill="none" stroke="#05204A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <line x1="${dx.toFixed(1)}" y1="${padTop - 3}" x2="${dx.toFixed(1)}" y2="${H - padBot}" stroke="#05204A" stroke-width="0.75" stroke-opacity="0.4"/>
+                    <circle cx="${dx.toFixed(1)}" cy="${dy.toFixed(1)}" r="4" fill="#05204A"/>
+                </svg>
+            `;
+        }
+
         function enableFullScreen() {
             const elem = document.documentElement;
             (elem.requestFullscreen || elem.webkitRequestFullscreen).call(elem);
@@ -407,6 +478,9 @@
                     <span>${getTimeUntilNextTide(nextTide)}</span>
                 </div>
             `;
+
+            const wave = buildTideWaveSvg(preds, now);
+            if (wave) tideHTML += `<div class="tide-wave">${wave}</div>`;
 
             futureTides.slice(0, 4).forEach((tide) => {
                 const day = tide.t.trim().split(/[ T]/)[0];
