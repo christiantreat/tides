@@ -40,9 +40,10 @@
             box-sizing: border-box;
             overflow-y: auto;
         }
-        .location { font-size: 24px; font-weight: bold; margin-top: env(safe-area-inset-top); }
-        .subtitle { font-size: 12px; opacity: 0.7; margin-top: 2px; }
-        .current-date { font-size: 18px; margin-top: 6px; margin-bottom: 20px; }
+        .header-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-top: env(safe-area-inset-top); }
+        .location { font-size: 20px; font-weight: bold; }
+        .current-date { font-size: 13px; opacity: 0.85; white-space: nowrap; }
+        .subtitle { font-size: 12px; opacity: 0.7; margin: 2px 0 16px; }
         .note { font-size: 11px; opacity: 0.65; }
         .tide-wave { width: 100%; margin: 8px 0 4px; line-height: 0; }
         .tide-wave svg { width: 100%; height: auto; display: block; }
@@ -96,9 +97,11 @@
 </head>
 <body>
     <div class="app-container">
-        <div class="location">Old Field Club</div>
-        <div class="subtitle">Estimated tide &middot; interpolated from Port Jefferson &amp; Northport</div>
-        <div class="current-date" id="currentDate"></div>
+        <div class="header-line">
+            <span class="location">Old Field Club</span>
+            <span class="current-date" id="currentDate"></span>
+        </div>
+        <div class="subtitle">Estimated tide &middot; Port Jefferson + Northport</div>
         <div id="loading">Loading data...</div>
         <div id="error" style="display: none;"></div>
         <div id="tideInfo" class="data-section" style="display: none;">
@@ -587,7 +590,7 @@
         }
 
         function updateCurrentDate() {
-            document.getElementById('currentDate').textContent = new Date().toLocaleDateString(undefined, { timeZone: TIME_ZONE, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+            document.getElementById('currentDate').textContent = new Date().toLocaleDateString(undefined, { timeZone: TIME_ZONE, weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
         }
 
         function updateLandscapeTime() {
