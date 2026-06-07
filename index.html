@@ -46,6 +46,13 @@
         .note { font-size: 11px; opacity: 0.65; }
         .tide-wave { width: 100%; margin: 8px 0 4px; line-height: 0; }
         .tide-wave svg { width: 100%; height: auto; display: block; }
+        .sky { width: 100%; margin-bottom: 10px; line-height: 0; }
+        .sky svg { width: 100%; height: auto; display: block; border-radius: 8px; }
+        .phase-cap { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; }
+        .phase-cap svg { width: 22px; height: 22px; flex: none; }
+        .sky-cols { display: flex; gap: 16px; }
+        .sky-cols > div { flex: 1; }
+        .sky-cols .col-head { font-weight: bold; margin-bottom: 4px; }
         .data-section { width: 100%; margin-bottom: 20px; }
         .data-section h2 { font-size: 18px; margin: 0 0 10px; }
         .data-box {
@@ -100,12 +107,8 @@
             <h2>Water Temperature</h2>
             <div class="data-box"></div>
         </div>
-        <div id="sunInfo" class="data-section" style="display: none;">
-            <h2>Sun Information</h2>
-            <div class="data-box"></div>
-        </div>
-        <div id="moonInfo" class="data-section" style="display: none;">
-            <h2>Moon Information</h2>
+        <div id="skyInfo" class="data-section" style="display: none;">
+            <h2>Sun &amp; Moon</h2>
             <div class="data-box"></div>
         </div>
         <div class="landscape-time" id="landscapeTime"></div>
@@ -415,6 +418,152 @@
             `;
         }
 
+        // --- Sun & Moon sky timeline -----------------------------------------
+
+        // "HH:MM" -> fractional hours (e.g. "12:51" -> 12.85), or null if absent.
+        function parseHM(t) {
+            if (!t) return null;
+            const m = /^(\d{1,2}):(\d{2})/.exec(t.trim());
+            return m ? parseInt(m[1], 10) + parseInt(m[2], 10) / 60 : null;
+        }
+
+        // Current Eastern time as fractional hours in [0,24).
+        function easternNowHours() {
+            const s = new Date().toLocaleTimeString('en-GB', { timeZone: TIME_ZONE, hour12: false, hour: '2-digit', minute: '2-digit' });
+            return parseHM(s) || 0;
+        }
+
+        // Moon phase as { k: lit fraction 0..1, waxing: bool } from the USNO
+        // curphase/fracillum strings, or null when unavailable.
+        function parsePhase(curphase, fracillum) {
+            if (!curphase || !fracillum) return null;
+            const k = parseFloat(fracillum) / 100;
+            if (!isFinite(k)) return null;
+            return { k, waxing: /Waxing|First Quarter|New/.test(curphase) };
+        }
+
+        // Above-horizon spans of the moon for the day, as [start,end,peak] in
+        // hours. The moon (unlike the sun here) can rise/set across midnight or
+        // have a missing rise or set on a given calendar day, so we bound open
+        // ends at 0/24 and split when it is up over midnight.
+        function moonUpIntervals(r, s, z) {
+            let iv;
+            if (r != null && s != null) iv = (r < s) ? [[r, s]] : [[0, s], [r, 24]];
+            else if (r != null) iv = [[r, 24]];
+            else if (s != null) iv = [[0, s]];
+            else iv = (z != null) ? [[0, 24]] : [];
+            return iv.map(([a, b]) => [a, b, (z != null && z >= a && z <= b) ? z : (a + b) / 2]);
+        }
+
+        // Elevation 0..1 of a body at hour h within a hump [a,b] peaking at `peak`
+        // (smooth half-cosines, reusing tideHeightBetween), or null if outside.
+        function elevInHump(a, b, peak, h) {
+            if (h < a || h > b) return null;
+            if (peak <= a) return tideHeightBetween(1, 0, (h - a) / (b - a || 1));
+            if (peak >= b) return tideHeightBetween(0, 1, (h - a) / (b - a || 1));
+            return h <= peak ? tideHeightBetween(0, 1, (h - a) / (peak - a || 1))
+                             : tideHeightBetween(1, 0, (h - peak) / (b - peak || 1));
+        }
+
+        // Path for the LIT portion of the moon disc: outer limb semicircle on the
+        // lit side joined to the terminator semi-ellipse. rx collapses to 0 at the
+        // quarters (straight terminator) and to R at new/full (full semicircle).
+        function moonPhasePath(cx, cy, R, k, waxing) {
+            const rx = (R * Math.abs(1 - 2 * k)).toFixed(2);
+            const limbSweep = waxing ? 1 : 0;
+            const termSweep = waxing ? (k > 0.5 ? 1 : 0) : (k > 0.5 ? 0 : 1);
+            const top = `${cx} ${cy - R}`, bot = `${cx} ${cy + R}`;
+            return `M ${top} A ${R} ${R} 0 0 ${limbSweep} ${bot} A ${rx} ${R} 0 0 ${termSweep} ${top} Z`;
+        }
+
+        // A moon glyph: dark disc, the lit area for the given phase, and a faint ring.
+        function moonGlyph(cx, cy, R, phase) {
+            const base = `<circle cx="${cx}" cy="${cy}" r="${R}" fill="#1d2c45"/>`;
+            const lit = (phase && phase.k > 0.02)
+                ? `<path d="${moonPhasePath(cx, cy, R, phase.k, phase.waxing)}" fill="#E8EEF2"/>` : '';
+            const ring = `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="#C9D6E0" stroke-width="0.75" stroke-opacity="0.6"/>`;
+            return base + lit + ring;
+        }
+
+        // The 24-hour sky timeline SVG: day/twilight/night shading, the sun and
+        // moon arcs, and live markers (the moon's marker is its phase glyph).
+        // `nowH` is fractional hours; defaults to the current Eastern time.
+        function buildSkySvg(sunMoonData, nowH) {
+            if (nowH == null) nowH = easternNowHours();
+            const sd = {}; (sunMoonData.sundata || []).forEach(i => sd[i.phen] = i.time);
+            const md = {}; (sunMoonData.moondata || []).forEach(i => md[i.phen] = i.time);
+            const firstLight = parseHM(sd['Begin Civil Twilight']);
+            const sunrise = parseHM(sd['Rise']);
+            const noon = parseHM(sd['Upper Transit']);
+            const sunset = parseHM(sd['Set']);
+            const lastLight = parseHM(sd['End Civil Twilight']);
+            const moonrise = parseHM(md['Rise']);
+            const moonZenith = parseHM(md['Upper Transit']);
+            const moonset = parseHM(md['Set']);
+            const phase = parsePhase(sunMoonData.curphase, sunMoonData.fracillum);
+
+            const W = 320, H = 120, padX = 6, horizon = 86, arcTop = 16;
+            const xOf = h => padX + (h / 24) * (W - 2 * padX);
+            const yOf = e => horizon - e * (horizon - arcTop);
+            const poly = pts => pts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+            const hump = (a, b, peak) => {
+                const pts = [], steps = 28;
+                for (let i = 0; i <= steps; i++) {
+                    const h = a + (b - a) * (i / steps);
+                    pts.push([xOf(h), yOf(elevInHump(a, b, peak, h))]);
+                }
+                return pts;
+            };
+            const band = (a, b, fill) => (a == null || b == null || b <= a) ? ''
+                : `<rect x="${xOf(a).toFixed(1)}" y="0" width="${(xOf(b) - xOf(a)).toFixed(1)}" height="${horizon}" fill="${fill}"/>`;
+
+            // Background: night sky, twilight gradients, daylight, then ground.
+            let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sun and moon over a 24-hour horizon">
+                <defs>
+                    <linearGradient id="dawn" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#05204A"/><stop offset="1" stop-color="#bcd6e6"/></linearGradient>
+                    <linearGradient id="dusk" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#bcd6e6"/><stop offset="1" stop-color="#05204A"/></linearGradient>
+                </defs>
+                <rect x="0" y="0" width="${W}" height="${horizon}" fill="#05204A"/>
+                ${band(firstLight, sunrise, 'url(#dawn)')}
+                ${band(sunrise, sunset, '#bcd6e6')}
+                ${band(sunset, lastLight, 'url(#dusk)')}
+                <rect x="0" y="${horizon}" width="${W}" height="${H - horizon}" fill="#14304f"/>
+                <line x1="0" y1="${horizon}" x2="${W}" y2="${horizon}" stroke="#ffffff" stroke-opacity="0.25" stroke-width="1"/>`;
+
+            // Moon arc(s) — drawn under the sun so the sun reads on top in daylight.
+            moonUpIntervals(moonrise, moonset, moonZenith).forEach(([a, b, peak]) => {
+                svg += `<polyline points="${poly(hump(a, b, peak))}" fill="none" stroke="#C9D6E0" stroke-width="2" stroke-opacity="0.85" stroke-dasharray="4 3" stroke-linecap="round"/>`;
+            });
+
+            // Sun arc.
+            if (sunrise != null && sunset != null) {
+                const peak = (noon != null) ? noon : (sunrise + sunset) / 2;
+                svg += `<polyline points="${poly(hump(sunrise, sunset, peak))}" fill="none" stroke="#F2C96E" stroke-width="2.5" stroke-linecap="round"/>`;
+            }
+
+            // Now line.
+            const nx = xOf(nowH).toFixed(1);
+            svg += `<line x1="${nx}" y1="4" x2="${nx}" y2="${horizon}" stroke="#ffffff" stroke-opacity="0.45" stroke-width="0.75" stroke-dasharray="2 2"/>`;
+
+            // Moon marker (phase glyph) if the moon is currently up.
+            for (const [a, b, peak] of moonUpIntervals(moonrise, moonset, moonZenith)) {
+                const e = elevInHump(a, b, peak, nowH);
+                if (e != null) { svg += moonGlyph(parseFloat(nx), yOf(e), 7, phase); break; }
+            }
+
+            // Sun marker if the sun is currently up.
+            if (sunrise != null && sunset != null) {
+                const peak = (noon != null) ? noon : (sunrise + sunset) / 2;
+                const e = elevInHump(sunrise, sunset, peak, nowH);
+                if (e != null) {
+                    const sy = yOf(e).toFixed(1);
+                    svg += `<circle cx="${nx}" cy="${sy}" r="6" fill="#F4C95B" stroke="#E8A33D" stroke-width="1.5"/>`;
+                }
+            }
+
+            return svg + '</svg>';
+        }
+
         function enableFullScreen() {
             const elem = document.documentElement;
             (elem.requestFullscreen || elem.webkitRequestFullscreen).call(elem);
@@ -543,41 +692,46 @@
         }
 
         function updateSunMoonInfo(sunMoonData) {
-            const sunInfoElement = document.getElementById('sunInfo').querySelector('.data-box');
-            const moonInfoElement = document.getElementById('moonInfo').querySelector('.data-box');
+            const box = document.getElementById('skyInfo').querySelector('.data-box');
 
             const sunLabels = {
                 'Begin Civil Twilight': 'First Light',
                 'Upper Transit': 'Midday',
                 'End Civil Twilight': 'Last Light'
             };
+            const sunOrder = ['Begin Civil Twilight', 'Rise', 'Upper Transit', 'Set', 'End Civil Twilight'];
+            const moonLabels = { 'Rise': 'Rise', 'Upper Transit': 'Zenith', 'Set': 'Set' };
+            const moonOrder = ['Rise', 'Upper Transit', 'Set'];
 
-            sunInfoElement.innerHTML = sunMoonData.sundata.map(item => `
-                <div class="data-item">
-                    <span class="data-label">${sunLabels[item.phen] || item.phen}:</span>
-                    <span>${item.time}</span>
-                </div>
-            `).join('');
+            const sunByPhen = {}; (sunMoonData.sundata || []).forEach(i => sunByPhen[i.phen] = i.time);
+            const moonByPhen = {}; (sunMoonData.moondata || []).forEach(i => moonByPhen[i.phen] = i.time);
 
-            moonInfoElement.innerHTML = `
+            const row = (label, value) => `
                 <div class="data-item">
-                    <span class="data-label">Phase:</span>
-                    <span>${sunMoonData.curphase}</span>
+                    <span class="data-label">${label}:</span>
+                    <span>${value || '—'}</span>
+                </div>`;
+
+            const sunRows = sunOrder.map(p => row(sunLabels[p] || p, sunByPhen[p])).join('');
+            const moonRows = moonOrder.map(p => row(moonLabels[p], moonByPhen[p])).join('');
+
+            const phase = parsePhase(sunMoonData.curphase, sunMoonData.fracillum);
+            const phaseCap = phase ? `
+                <div class="phase-cap">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">${moonGlyph(12, 12, 11, phase)}</svg>
+                    <span>${sunMoonData.curphase} &middot; ${sunMoonData.fracillum} lit</span>
+                </div>` : '';
+
+            box.innerHTML = `
+                <div class="sky">${buildSkySvg(sunMoonData, easternNowHours())}</div>
+                ${phaseCap}
+                <div class="sky-cols">
+                    <div><div class="col-head">☀ Sun</div>${sunRows}</div>
+                    <div><div class="col-head">☾ Moon</div>${moonRows}</div>
                 </div>
-                <div class="data-item">
-                    <span class="data-label">Illumination:</span>
-                    <span>${sunMoonData.fracillum}</span>
-                </div>
-                ${sunMoonData.moondata.map(item => `
-                    <div class="data-item">
-                        <span class="data-label">${item.phen === 'Upper Transit' ? 'Zenith' : item.phen}:</span>
-                        <span>${item.time}</span>
-                    </div>
-                `).join('')}
             `;
 
-            document.getElementById('sunInfo').style.display = 'block';
-            document.getElementById('moonInfo').style.display = 'block';
+            document.getElementById('skyInfo').style.display = 'block';
         }
 
         async function updateAllInfo() {
