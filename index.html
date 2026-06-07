@@ -680,7 +680,7 @@
             const reading = tempData && tempData.data && tempData.data[0];
             const v = reading ? parseFloat(reading.v) : NaN;
             if (!isFinite(v)) { chip.style.display = 'none'; return; }
-            chip.textContent = `🌡 ${Math.round(v)}°F`;
+            chip.textContent = `Water ${Math.round(v)}°F`;
             chip.title = `Water temp ${v.toFixed(1)}°F · source: ${sourceName}`;
             chip.style.display = 'inline-block';
         }
