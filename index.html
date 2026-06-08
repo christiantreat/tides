@@ -73,23 +73,22 @@
         .pill.down1 { background: #dbe6f4; color: #2c4a7a; }
         .pill.down2 { background: #c0d6f2; color: #0c3a7a; }
         #loading, #error { text-align: center; font-size: 18px; }
-        .landscape-time {
+        /* In landscape the phone turns into a local radar display: the portrait
+           app is hidden and a full-screen iframe of digital.weather.gov's map
+           takes over. The iframe is a direct child of <body> so it can fill the
+           whole viewport, unconstrained by the portrait container's max-width. */
+        .landscape-radar {
             display: none;
-            font-size: 48px;
-            font-weight: bold;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
         }
         @media (orientation: landscape) {
             body { background-color: #05204A; }
-            .app-container {
-                background-color: transparent;
-                box-shadow: none;
-            }
-            .app-container > *:not(.landscape-time) { display: none; }
-            .landscape-time { display: block; color: #E8EEF2; }
+            .app-container { display: none; }
+            .landscape-radar { display: block; }
         }
     </style>
 </head>
@@ -105,8 +104,12 @@
         <div id="todayInfo" class="data-section" style="display: none;">
             <div class="data-box"></div>
         </div>
-        <div class="landscape-time" id="landscapeTime"></div>
     </div>
+    <!-- Local NWS radar/forecast map, shown only in landscape (see CSS). The src
+         is set lazily the first time the phone enters landscape so portrait use
+         never loads the heavy map. Centered on the Old Field Club area. -->
+    <iframe class="landscape-radar" id="radarFrame" title="Local radar map"
+            loading="lazy" referrerpolicy="no-referrer"></iframe>
 
     <script>
         // Port Jefferson is in the US Eastern time zone. Anchoring everything to
@@ -545,7 +548,7 @@
                 }
             }
             updateCurrentDate();
-            updateLandscapeTime();
+            syncRadar();
         });
 
         async function fetchData(url) {
@@ -558,9 +561,16 @@
             document.getElementById('currentDate').textContent = new Date().toLocaleDateString(undefined, { timeZone: TIME_ZONE, weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
         }
 
-        function updateLandscapeTime() {
-            document.getElementById('landscapeTime').textContent = new Date().toLocaleTimeString([], { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+        // The radar iframe loads lazily: its src is only set the first time the
+        // phone is in landscape, so portrait-only use never fetches the map. Once
+        // loaded it stays loaded, so flipping back and forth doesn't reload it.
+        const RADAR_URL = 'https://digital.weather.gov/?zoom=8&lat=41.07487&lon=-73.26116&layers=00BTFTTTFTT&region=0&element=0&mxmz=false';
+        const landscapeMediaQuery = window.matchMedia('(orientation: landscape)');
+        function syncRadar() {
+            const frame = document.getElementById('radarFrame');
+            if (landscapeMediaQuery.matches && !frame.src) frame.src = RADAR_URL;
         }
+        landscapeMediaQuery.addEventListener('change', syncRadar);
 
         function formatTideTime(dateTimeString) {
             return parseEasternDateTime(dateTimeString).toLocaleTimeString([], { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false });
@@ -680,7 +690,7 @@
 
                 updateTodayInfo(estimated, baseline, smToday, celestial, tempData);
                 updateCurrentDate();
-                updateLandscapeTime();
+                syncRadar();
 
                 loadingElement.style.display = 'none';
             } catch (error) {
@@ -692,7 +702,6 @@
 
         updateAllInfo();
         setInterval(updateAllInfo, 60000);
-        setInterval(updateLandscapeTime, 1000);
     </script>
 </body>
 </html>
