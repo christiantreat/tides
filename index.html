@@ -85,7 +85,7 @@
             min-width: 0;
             height: 100%;
             object-fit: contain;
-            object-position: left center;   /* nudge the map toward the left */
+            object-position: center center;   /* centered within its own (left) section */
             background-color: #05204A;
         }
         /* Scrolling local forecast panel */
@@ -110,23 +110,20 @@
             padding: 10px 14px;
             border-bottom: 1px solid rgba(232, 238, 242, 0.18);
         }
-        .forecast-viewport { position: relative; flex: 1 1 auto; overflow: hidden; }
-        /* The track holds two copies of the forecast; translating it up by half its
-           height swaps copy 2 into copy 1's place for a seamless infinite loop. The
-           duration is set in JS from the measured height to keep a constant (slow)
-           speed regardless of how long the forecast is. */
-        .forecast-scroll {
-            position: absolute;
-            left: 0; right: 0; top: 0;
-            padding: 0 14px;
-            animation: forecast-scroll 90s linear infinite;
+        /* Native scroll container so touch gestures work; auto-scroll is driven in
+           JS (requestAnimationFrame) and pauses while touched. The track holds two
+           copies of the forecast and JS wraps scrollTop within one copy for a
+           seamless loop. Scrollbar hidden for a clean station look. */
+        .forecast-viewport {
+            flex: 1 1 auto;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
         }
+        .forecast-viewport::-webkit-scrollbar { display: none; }
+        .forecast-scroll { padding: 0 14px; }
         .forecast-period { padding: 13px 0; font-size: 13px; line-height: 1.55; }
         .forecast-period .name { display: block; font-weight: bold; margin-bottom: 3px; }
-        @keyframes forecast-scroll {
-            from { transform: translateY(0); }
-            to   { transform: translateY(-50%); }
-        }
         @media (orientation: landscape) {
             body { background-color: #05204A; }
             .app-container { display: none; }
@@ -155,7 +152,7 @@
              referrerpolicy="no-referrer">
         <aside class="landscape-forecast" aria-label="Local text forecast">
             <div class="forecast-head">Local Forecast</div>
-            <div class="forecast-viewport">
+            <div class="forecast-viewport" id="forecastViewport">
                 <div class="forecast-scroll" id="forecastScroll"></div>
             </div>
         </aside>
@@ -643,14 +640,40 @@
                     `<div class="forecast-period"><span class="name">${p.name}</span>${p.detailedForecast}</div>`
                 ).join('');
                 scroll.innerHTML = html + html;   // two copies for a seamless loop
-                const oneCopy = scroll.scrollHeight / 2;
-                if (oneCopy > 0) scroll.style.animationDuration = Math.round(oneCopy / 16) + 's';  // ~16px/s
                 forecastFetchedAt = Date.now();
             } catch (e) { /* keep showing the previous forecast */ }
         }
 
         function refreshLandscape() { refreshRadar(); refreshForecast(); }
         landscapeMediaQuery.addEventListener('change', refreshLandscape);
+
+        // Auto-scroll the forecast slowly upward, but let touch take over: any
+        // user interaction pauses the auto-scroll, which resumes a couple seconds
+        // after they let go. Native scrolling provides momentum + manual control;
+        // a rAF loop nudges scrollTop when idle and wraps within the duplicated
+        // content (scrollTop >= one copy → subtract a copy) for a seamless loop.
+        const FORECAST_SPEED = 16;   // px/sec, very slow
+        let forecastPaused = false, forecastResumeTimer = null, forecastLastTs = 0;
+        function forecastTick(ts) {
+            const vp = document.getElementById('forecastViewport');
+            const half = vp ? vp.scrollHeight / 2 : 0;
+            if (half > 0) {
+                if (!forecastPaused && forecastLastTs) vp.scrollTop += FORECAST_SPEED * (ts - forecastLastTs) / 1000;
+                if (vp.scrollTop >= half) vp.scrollTop -= half;   // seamless wrap
+            }
+            forecastLastTs = ts;
+            requestAnimationFrame(forecastTick);
+        }
+        function pauseForecast() { forecastPaused = true; clearTimeout(forecastResumeTimer); }
+        function resumeForecastSoon() { clearTimeout(forecastResumeTimer); forecastResumeTimer = setTimeout(() => { forecastPaused = false; }, 2500); }
+        (function initForecastScroll() {
+            const vp = document.getElementById('forecastViewport');
+            if (!vp) return;
+            ['touchstart', 'pointerdown'].forEach(ev => vp.addEventListener(ev, pauseForecast, { passive: true }));
+            ['touchend', 'pointerup', 'pointercancel', 'mouseleave'].forEach(ev => vp.addEventListener(ev, resumeForecastSoon, { passive: true }));
+            vp.addEventListener('wheel', () => { pauseForecast(); resumeForecastSoon(); }, { passive: true });
+            requestAnimationFrame(forecastTick);
+        })();
 
         function formatTideTime(dateTimeString) {
             return parseEasternDateTime(dateTimeString).toLocaleTimeString([], { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false });
