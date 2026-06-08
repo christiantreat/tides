@@ -73,25 +73,64 @@
         .pill.down1 { background: #dbe6f4; color: #2c4a7a; }
         .pill.down2 { background: #c0d6f2; color: #0c3a7a; }
         #loading, #error { text-align: center; font-size: 18px; }
-        /* In landscape the phone turns into a local radar display: the portrait
-           app is hidden and a full-screen NWS radar GIF takes over. The image is
-           a direct child of <body> so it can fill the whole viewport, unconstrained
-           by the portrait container's max-width. object-fit: contain shows the
-           whole (square-ish) map centered, with app-blue filling the side bars. */
+        /* In landscape the phone turns into a weather-station display: the
+           portrait app is hidden and a full-screen flex row takes over — the live
+           NWS radar on the left, and a slowly scrolling local text forecast on the
+           right (old "Local on the 8s" style). The wrapper is a direct child of
+           <body> so it can fill the whole viewport, unconstrained by the portrait
+           container's max-width. */
+        .landscape-view { display: none; }
         .landscape-radar {
-            display: none;
-            position: fixed;
-            inset: 0;
-            width: 100%;
+            flex: 1 1 auto;
+            min-width: 0;
             height: 100%;
-            border: 0;
             object-fit: contain;
+            object-position: left center;   /* nudge the map toward the left */
             background-color: #05204A;
+        }
+        /* Scrolling local forecast panel */
+        .landscape-forecast {
+            flex: 0 0 32%;
+            max-width: 340px;
+            height: 100%;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-color: #05204A;
+            color: #E8EEF2;
+            border-left: 1px solid rgba(232, 238, 242, 0.18);
+        }
+        .forecast-head {
+            flex: none;
+            font-weight: bold;
+            font-size: 15px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(232, 238, 242, 0.18);
+        }
+        .forecast-viewport { position: relative; flex: 1 1 auto; overflow: hidden; }
+        /* The track holds two copies of the forecast; translating it up by half its
+           height swaps copy 2 into copy 1's place for a seamless infinite loop. The
+           duration is set in JS from the measured height to keep a constant (slow)
+           speed regardless of how long the forecast is. */
+        .forecast-scroll {
+            position: absolute;
+            left: 0; right: 0; top: 0;
+            padding: 0 14px;
+            animation: forecast-scroll 90s linear infinite;
+        }
+        .forecast-period { padding: 13px 0; font-size: 13px; line-height: 1.55; }
+        .forecast-period .name { display: block; font-weight: bold; margin-bottom: 3px; }
+        @keyframes forecast-scroll {
+            from { transform: translateY(0); }
+            to   { transform: translateY(-50%); }
         }
         @media (orientation: landscape) {
             body { background-color: #05204A; }
             .app-container { display: none; }
-            .landscape-radar { display: block; }
+            .landscape-view { display: flex; position: fixed; inset: 0; }
         }
     </style>
 </head>
@@ -108,11 +147,19 @@
             <div class="data-box"></div>
         </div>
     </div>
-    <!-- Live local NWS radar (KOKX, Upton NY) shown only in landscape (see CSS).
-         A direct GIF = just the map, no page chrome. Loaded lazily the first time
-         the phone enters landscape and refreshed while it stays there. -->
-    <img class="landscape-radar" id="radarFrame" alt="Local NWS radar (KOKX)"
-         referrerpolicy="no-referrer">
+    <!-- Landscape weather-station view (see CSS): live local NWS radar (KOKX,
+         Upton NY) on the left + a slowly scrolling NWS text forecast on the right.
+         Both load lazily the first time the phone enters landscape. -->
+    <div class="landscape-view" id="landscapeView">
+        <img class="landscape-radar" id="radarFrame" alt="Local NWS radar (KOKX)"
+             referrerpolicy="no-referrer">
+        <aside class="landscape-forecast" aria-label="Local text forecast">
+            <div class="forecast-head">Local Forecast</div>
+            <div class="forecast-viewport">
+                <div class="forecast-scroll" id="forecastScroll"></div>
+            </div>
+        </aside>
+    </div>
 
     <script>
         // Port Jefferson is in the US Eastern time zone. Anchoring everything to
@@ -551,7 +598,7 @@
                 }
             }
             updateCurrentDate();
-            refreshRadar();
+            refreshLandscape();
         });
 
         async function fetchData(url) {
@@ -564,17 +611,46 @@
             document.getElementById('currentDate').textContent = new Date().toLocaleDateString(undefined, { timeZone: TIME_ZONE, weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
         }
 
-        // The radar loads lazily and stays fresh: its src is only set while the
-        // phone is in landscape (portrait-only use never fetches it), and the
-        // cache-busting timestamp pulls the newest scan on each refresh. KOKX is
-        // the NWS Upton, NY site, whose coverage is centered on the target area.
+        // The landscape radar + forecast load lazily and stay fresh: nothing is
+        // fetched while the phone is in portrait. The radar's cache-busting
+        // timestamp pulls the newest scan on each refresh. KOKX is the NWS Upton,
+        // NY site (radar), OKX grid 61,57 the NWS forecast cell, both centered on
+        // the target area.
         const RADAR_URL = 'https://radar.weather.gov/ridge/standard/KOKX_loop.gif';
+        const FORECAST_URL = 'https://api.weather.gov/gridpoints/OKX/61,57/forecast';
         const landscapeMediaQuery = window.matchMedia('(orientation: landscape)');
+
         function refreshRadar() {
             if (!landscapeMediaQuery.matches) return;   // never fetch in portrait
             document.getElementById('radarFrame').src = RADAR_URL + '?t=' + Date.now();
         }
-        landscapeMediaQuery.addEventListener('change', refreshRadar);
+
+        // Fetches the NWS local forecast and feeds the scrolling panel. The track
+        // holds two copies of the forecast so the CSS translateY(-50%) loop is
+        // seamless; the animation duration is derived from the measured height to
+        // keep a constant, very slow scroll. Refetched at most every 30 min (the
+        // forecast changes slowly); failures leave the previous forecast in place.
+        let forecastFetchedAt = 0;
+        async function refreshForecast() {
+            if (!landscapeMediaQuery.matches) return;
+            const scroll = document.getElementById('forecastScroll');
+            if (scroll.children.length && Date.now() - forecastFetchedAt < 30 * 60 * 1000) return;
+            try {
+                const data = await fetchData(FORECAST_URL);
+                const periods = (data.properties && data.properties.periods) || [];
+                if (!periods.length) return;
+                const html = periods.map(p =>
+                    `<div class="forecast-period"><span class="name">${p.name}</span>${p.detailedForecast}</div>`
+                ).join('');
+                scroll.innerHTML = html + html;   // two copies for a seamless loop
+                const oneCopy = scroll.scrollHeight / 2;
+                if (oneCopy > 0) scroll.style.animationDuration = Math.round(oneCopy / 16) + 's';  // ~16px/s
+                forecastFetchedAt = Date.now();
+            } catch (e) { /* keep showing the previous forecast */ }
+        }
+
+        function refreshLandscape() { refreshRadar(); refreshForecast(); }
+        landscapeMediaQuery.addEventListener('change', refreshLandscape);
 
         function formatTideTime(dateTimeString) {
             return parseEasternDateTime(dateTimeString).toLocaleTimeString([], { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false });
@@ -694,7 +770,7 @@
 
                 updateTodayInfo(estimated, baseline, smToday, celestial, tempData);
                 updateCurrentDate();
-                refreshRadar();
+                refreshLandscape();
 
                 loadingElement.style.display = 'none';
             } catch (error) {
@@ -706,7 +782,7 @@
 
         updateAllInfo();
         setInterval(updateAllInfo, 60000);
-        setInterval(refreshRadar, 5 * 60 * 1000);
+        setInterval(refreshLandscape, 5 * 60 * 1000);
     </script>
 </body>
 </html>
