@@ -45,10 +45,9 @@
         .current-date { font-size: 13px; opacity: 0.85; white-space: nowrap; }
         .subtitle { font-size: 12px; opacity: 0.7; margin: 2px 0 16px; }
         .note { font-size: 11px; opacity: 0.65; }
-        .tide-wave { width: 100%; margin: 8px 0 4px; line-height: 0; }
-        .tide-wave svg { width: 100%; height: auto; display: block; }
-        .sky { width: 100%; margin-bottom: 10px; line-height: 0; }
-        .sky svg { width: 100%; height: auto; display: block; border-radius: 8px; }
+        .scene { width: 100%; margin-bottom: 10px; line-height: 0; }
+        .scene svg { width: 100%; height: auto; display: block; border-radius: 8px; }
+        .divider { border-top: 1px solid rgba(5, 32, 74, 0.12); margin: 10px 0; }
         .phase-cap { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; }
         .phase-cap svg { width: 22px; height: 22px; flex: none; }
         .sky-cols { display: flex; gap: 16px; }
@@ -56,8 +55,6 @@
         .sky-cols .col-head { font-weight: bold; margin-bottom: 4px; }
         .data-section { width: 100%; margin-bottom: 20px; }
         .data-section h2 { font-size: 18px; margin: 0 0 10px; }
-        .data-section h2.sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-        .temp-chip { font-size: 13px; font-weight: normal; background: #d8e0e6; color: #05204A; padding: 2px 10px; border-radius: 20px; white-space: nowrap; }
         .data-box {
             background-color: #FFFFFF;
             border-radius: 10px;
@@ -66,8 +63,9 @@
             width: 100%;
             box-sizing: border-box;
         }
-        .data-item { display: flex; justify-content: space-between; margin-bottom: 5px; }
-        .data-label { font-weight: bold; }
+        .data-item { display: flex; justify-content: space-between; gap: 6px; margin-bottom: 5px; }
+        .data-label { font-weight: bold; white-space: nowrap; }
+        .sky-cols { font-size: 13px; }
         .pill { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px; font-weight: bold; white-space: nowrap; }
         .pill.up2 { background: #f2c9c0; color: #7a1f0c; }
         .pill.up1 { background: #f7e0d2; color: #8a4a2c; }
@@ -104,12 +102,7 @@
         <div class="subtitle">Estimated tide &middot; Port Jefferson + Northport</div>
         <div id="loading">Loading data...</div>
         <div id="error" style="display: none;"></div>
-        <div id="tideInfo" class="data-section" style="display: none;">
-            <h2 class="sec-head">Tide Information<span id="tempChip" class="temp-chip" style="display: none;"></span></h2>
-            <div class="data-box"></div>
-        </div>
-        <div id="skyInfo" class="data-section" style="display: none;">
-            <h2>Sun &amp; Moon</h2>
+        <div id="todayInfo" class="data-section" style="display: none;">
             <div class="data-box"></div>
         </div>
         <div class="landscape-time" id="landscapeTime"></div>
@@ -169,13 +162,20 @@
             return getEasternDateString(new Date(Date.now() + 24 * 60 * 60 * 1000));
         }
 
-        function getSunMoonApiUrl() {
+        function getSunMoonApiUrl(dateStr) {
             const tz = getEasternUtcOffset();
-            return `https://aa.usno.navy.mil/api/rstt/oneday?date=${getTodayDate()}&coords=${TARGET.lat},${TARGET.lon}&tz=${tz}&dst=false`;
+            return `https://aa.usno.navy.mil/api/rstt/oneday?date=${dateStr}&coords=${TARGET.lat},${TARGET.lon}&tz=${tz}&dst=false`;
+        }
+
+        // Eastern calendar date (YYYY-MM-DD) offset by N days from today.
+        function easternDateOffset(days) {
+            return getEasternDateString(new Date(Date.now() + days * 24 * 60 * 60 * 1000));
         }
 
         function getTideApiUrl(stationId) {
-            const beginDate = getTodayDate().replace(/-/g, '');
+            // Yesterday → tomorrow, so the now-centered ±12h tide curve always has
+            // bracketing events even in the early morning or late evening.
+            const beginDate = easternDateOffset(-1).replace(/-/g, '');
             const endDate = getTomorrowDate().replace(/-/g, '');
             return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=${stationId}&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
         }
@@ -356,70 +356,7 @@
             return v0 + (v1 - v0) * (1 - Math.cos(Math.PI * f)) / 2;
         }
 
-        // A compact horizontal SVG of the tide curve around "now", drawn from the
-        // estimated hi/lo predictions (same data as the list) so the shape and the
-        // current-position dot line up with the numbers. Returns '' if there isn't
-        // enough data to draw, so the caller can simply omit it.
-        function buildTideWaveSvg(preds, now) {
-            if (!preds || preds.length < 2) return '';
-            const ev = preds.map(p => ({ ms: parseEasternDateTime(p.t).getTime(), v: parseFloat(p.v) }))
-                            .filter(e => isFinite(e.ms) && isFinite(e.v));
-            if (ev.length < 2) return '';
-            const nowMs = now.getTime();
-
-            // Window: the current cycle plus what's next (prev event + ~3 ahead).
-            let idxNext = ev.findIndex(e => e.ms > nowMs);
-            if (idxNext === -1) idxNext = ev.length;          // now after last event
-            const start = Math.max(0, idxNext - 1);
-            const end = Math.min(ev.length - 1, idxNext + 3);
-            const win = ev.slice(start, end + 1);
-            if (win.length < 2) return '';
-
-            const W = 320, H = 46, padX = 4, padTop = 7, padBot = 7;
-            const t0 = win[0].ms, t1 = win[win.length - 1].ms;
-            const span = t1 - t0 || 1;
-            const heights = win.map(e => e.v);
-            let yMin = Math.min(...heights), yMax = Math.max(...heights);
-            const pad = (yMax - yMin) * 0.08 || 0.5;
-            yMin -= pad; yMax += pad;
-            const xOf = ms => padX + ((ms - t0) / span) * (W - 2 * padX);
-            const yOf = v => padTop + (1 - (v - yMin) / (yMax - yMin)) * (H - padTop - padBot);
-
-            // Sample each segment with a half-cosine for a smooth tide curve.
-            const pts = [];
-            for (let i = 0; i < win.length - 1; i++) {
-                const a = win[i], b = win[i + 1], steps = 16;
-                for (let s = 0; s <= steps; s++) {
-                    if (i > 0 && s === 0) continue;            // avoid duplicate join points
-                    const f = s / steps;
-                    pts.push([xOf(a.ms + f * (b.ms - a.ms)), yOf(tideHeightBetween(a.v, b.v, f))]);
-                }
-            }
-            const line = pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
-            const area = `${padX},${H - padBot} ${line} ${(W - padX)},${H - padBot}`;
-
-            // Current position: clamp to the window edges if now sits outside it.
-            const nowClamped = Math.min(Math.max(nowMs, t0), t1);
-            let dotV;
-            if (idxNext <= 0) dotV = win[0].v;
-            else if (idxNext >= ev.length) dotV = win[win.length - 1].v;
-            else {
-                const a = ev[idxNext - 1], b = ev[idxNext];
-                dotV = tideHeightBetween(a.v, b.v, (nowMs - a.ms) / (b.ms - a.ms || 1));
-            }
-            const dx = xOf(nowClamped), dy = yOf(dotV);
-
-            return `
-                <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Current tide position">
-                    <polygon points="${area}" fill="#96ACB7" fill-opacity="0.25" stroke="none"/>
-                    <polyline points="${line}" fill="none" stroke="#05204A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    <line x1="${dx.toFixed(1)}" y1="${padTop - 3}" x2="${dx.toFixed(1)}" y2="${H - padBot}" stroke="#05204A" stroke-width="0.75" stroke-opacity="0.4"/>
-                    <circle cx="${dx.toFixed(1)}" cy="${dy.toFixed(1)}" r="4" fill="#05204A"/>
-                </svg>
-            `;
-        }
-
-        // --- Sun & Moon sky timeline -----------------------------------------
+        // --- Sun & Moon + tide "Sky & Sea" scene -----------------------------
 
         // "HH:MM" -> fractional hours (e.g. "12:51" -> 12.85), or null if absent.
         function parseHM(t) {
@@ -443,17 +380,46 @@
             return { k, waxing: /Waxing|First Quarter|New/.test(curphase) };
         }
 
-        // Above-horizon spans of the moon for the day, as [start,end,peak] in
-        // hours. The moon (unlike the sun here) can rise/set across midnight or
-        // have a missing rise or set on a given calendar day, so we bound open
-        // ends at 0/24 and split when it is up over midnight.
-        function moonUpIntervals(r, s, z) {
-            let iv;
-            if (r != null && s != null) iv = (r < s) ? [[r, s]] : [[0, s], [r, 24]];
-            else if (r != null) iv = [[r, 24]];
-            else if (s != null) iv = [[0, s]];
-            else iv = (z != null) ? [[0, 24]] : [];
-            return iv.map(([a, b]) => [a, b, (z != null && z >= a && z <= b) ? z : (a + b) / 2]);
+        // Builds a continuous celestial model in "hours from today's midnight" from
+        // several days of USNO data ([{off:-1,data},{off:0,data},{off:1,data}]). The
+        // scene is centered on now and can show times from the prior/next day, so we
+        // need adjacent days to draw day/night bands and to pair each moonrise with
+        // its TRUE next moonset — giving one smooth overnight moon arc instead of an
+        // arc clipped to the horizon at midnight.
+        function buildCelestial(days) {
+            const bands = [], sunArcs = [], sunTicks = [];
+            const rises = [], sets = [], transits = [];
+            days.forEach(({ off, data }) => {
+                if (!data) return;
+                const o = off * 24;
+                const sd = {}; (data.sundata || []).forEach(i => sd[i.phen] = i.time);
+                const md = {}; (data.moondata || []).forEach(i => md[i.phen] = i.time);
+                const fl = parseHM(sd['Begin Civil Twilight']), sr = parseHM(sd['Rise']),
+                      nn = parseHM(sd['Upper Transit']), ss = parseHM(sd['Set']), ll = parseHM(sd['End Civil Twilight']);
+                if (fl != null && sr != null) bands.push({ a: fl + o, b: sr + o, fill: 'url(#dawn)' });
+                if (sr != null && ss != null) bands.push({ a: sr + o, b: ss + o, fill: '#bcd6e6' });
+                if (ss != null && ll != null) bands.push({ a: ss + o, b: ll + o, fill: 'url(#dusk)' });
+                if (sr != null && ss != null) sunArcs.push({ rise: sr + o, noon: (nn != null ? nn : (sr + ss) / 2) + o, set: ss + o });
+                if (fl != null) sunTicks.push({ lab: 'first', h: fl + o, row: 0 });
+                if (sr != null) sunTicks.push({ lab: '↑', h: sr + o, row: 1 });
+                if (ss != null) sunTicks.push({ lab: '↓', h: ss + o, row: 0 });
+                if (ll != null) sunTicks.push({ lab: 'last', h: ll + o, row: 1 });
+                const mr = parseHM(md['Rise']), mt = parseHM(md['Upper Transit']), ms = parseHM(md['Set']);
+                if (mr != null) rises.push(mr + o);
+                if (ms != null) sets.push(ms + o);
+                if (mt != null) transits.push(mt + o);
+            });
+            // Pair each moonrise with the next moonset; transit between them (or midpoint).
+            rises.sort((a, b) => a - b); sets.sort((a, b) => a - b);
+            const bySet = {};
+            rises.forEach(r => {
+                const s = sets.find(x => x > r); if (s == null) return;
+                const t = transits.find(x => x > r && x < s);
+                const arc = { rise: r, transit: (t != null ? t : (r + s) / 2), set: s };
+                if (bySet[s] == null || r > bySet[s].rise) bySet[s] = arc;  // closest rise before the set
+            });
+            const moonArcs = Object.values(bySet).sort((a, b) => a.rise - b.rise);
+            return { bands, sunArcs, sunTicks, moonArcs };
         }
 
         // Elevation 0..1 of a body at hour h within a hump [a,b] peaking at `peak`
@@ -486,81 +452,80 @@
             return base + lit + ring;
         }
 
-        // The 24-hour sky timeline SVG: day/twilight/night shading, the sun and
-        // moon arcs, and live markers (the moon's marker is its phase glyph).
-        // `nowH` is fractional hours; defaults to the current Eastern time.
-        function buildSkySvg(sunMoonData, nowH) {
-            if (nowH == null) nowH = easternNowHours();
-            const sd = {}; (sunMoonData.sundata || []).forEach(i => sd[i.phen] = i.time);
-            const md = {}; (sunMoonData.moondata || []).forEach(i => md[i.phen] = i.time);
-            const firstLight = parseHM(sd['Begin Civil Twilight']);
-            const sunrise = parseHM(sd['Rise']);
-            const noon = parseHM(sd['Upper Transit']);
-            const sunset = parseHM(sd['Set']);
-            const lastLight = parseHM(sd['End Civil Twilight']);
-            const moonrise = parseHM(md['Rise']);
-            const moonZenith = parseHM(md['Upper Transit']);
-            const moonset = parseHM(md['Set']);
-            const phase = parsePhase(sunMoonData.curphase, sunMoonData.fracillum);
+        // "HH:MM" label for an absolute hour (handles values <0 or >24).
+        function fmtHour(absH) {
+            const h = ((Math.floor(absH) % 24) + 24) % 24;
+            const m = Math.round((absH - Math.floor(absH)) * 60);
+            return `${String(h).padStart(2, '0')}:${String(m === 60 ? 0 : m).padStart(2, '0')}`;
+        }
 
-            const W = 320, H = 120, padX = 6, horizon = 86, arcTop = 16;
-            const xOf = h => padX + (h / 24) * (W - 2 * padX);
-            const yOf = e => horizon - e * (horizon - arcTop);
+        // The now-centered "Sky & Sea" scene: a 24h window centered on the current
+        // time (fixed center line). The sun/moon arcs and the tide water all scroll
+        // past the center as time advances; the day/night shading scrolls with them.
+        // The tide is a translucent water level rising over the lower sky; the sun's
+        // day events sit on a bottom axis. `celestial` from buildCelestial; `preds`
+        // are estimated tide hi/los; `phase` from parsePhase; `tempF` a number/null.
+        function buildSceneSvg(celestial, preds, phase, tempF) {
+            const nowH = easternNowHours();
+            const Twin = 24, winStart = nowH - Twin / 2, winEnd = nowH + Twin / 2;
+            const W = 320, padX = 6, H = 196, sceneBottom = 158, arcBaseline = 138, arcTop = 14, seaTop = 72;
+            const xOf = t => padX + ((t - winStart) / Twin) * (W - 2 * padX);
+            const inWin = t => t >= winStart && t <= winEnd;
+            const clip = x => Math.max(padX, Math.min(W - padX, x));
+            const ySky = e => arcBaseline - e * (arcBaseline - arcTop);
+            const cx = xOf(nowH);
             const poly = pts => pts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
-            const hump = (a, b, peak) => {
-                const pts = [], steps = 28;
-                for (let i = 0; i <= steps; i++) {
-                    const h = a + (b - a) * (i / steps);
-                    pts.push([xOf(h), yOf(elevInHump(a, b, peak, h))]);
-                }
-                return pts;
-            };
-            const band = (a, b, fill) => (a == null || b == null || b <= a) ? ''
-                : `<rect x="${xOf(a).toFixed(1)}" y="0" width="${(xOf(b) - xOf(a)).toFixed(1)}" height="${horizon}" fill="${fill}"/>`;
+            const hump = (a, b, peak) => { const pts = []; for (let i = 0; i <= 48; i++) { const h = a + (b - a) * i / 48; if (inWin(h)) pts.push([xOf(h), ySky(elevInHump(a, b, peak, h))]); } return pts; };
 
-            // Background: night sky, twilight gradients, daylight, then ground.
-            let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sun and moon over a 24-hour horizon">
+            let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sun, moon and tide centered on now">
                 <defs>
                     <linearGradient id="dawn" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#05204A"/><stop offset="1" stop-color="#bcd6e6"/></linearGradient>
                     <linearGradient id="dusk" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#bcd6e6"/><stop offset="1" stop-color="#05204A"/></linearGradient>
+                    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b86a6"/><stop offset="1" stop-color="#16324d"/></linearGradient>
                 </defs>
-                <rect x="0" y="0" width="${W}" height="${horizon}" fill="#05204A"/>
-                ${band(firstLight, sunrise, 'url(#dawn)')}
-                ${band(sunrise, sunset, '#bcd6e6')}
-                ${band(sunset, lastLight, 'url(#dusk)')}
-                <rect x="0" y="${horizon}" width="${W}" height="${H - horizon}" fill="#14304f"/>
-                <line x1="0" y1="${horizon}" x2="${W}" y2="${horizon}" stroke="#ffffff" stroke-opacity="0.25" stroke-width="1"/>`;
+                <rect x="0" y="0" width="${W}" height="${sceneBottom}" fill="#05204A"/>`;
 
-            // Moon arc(s) — drawn under the sun so the sun reads on top in daylight.
-            moonUpIntervals(moonrise, moonset, moonZenith).forEach(([a, b, peak]) => {
-                svg += `<polyline points="${poly(hump(a, b, peak))}" fill="none" stroke="#C9D6E0" stroke-width="2" stroke-opacity="0.85" stroke-dasharray="4 3" stroke-linecap="round"/>`;
-            });
+            // Day/twilight bands (scroll with time), clipped to the window.
+            celestial.bands.forEach(({ a, b, fill }) => { const x1 = clip(xOf(a)), x2 = clip(xOf(b)); if (x2 > x1) svg += `<rect x="${x1.toFixed(1)}" y="0" width="${(x2 - x1).toFixed(1)}" height="${sceneBottom}" fill="${fill}"/>`; });
 
-            // Sun arc.
-            if (sunrise != null && sunset != null) {
-                const peak = (noon != null) ? noon : (sunrise + sunset) / 2;
-                svg += `<polyline points="${poly(hump(sunrise, sunset, peak))}" fill="none" stroke="#F2C96E" stroke-width="2.5" stroke-linecap="round"/>`;
+            // Continuous moon arcs, then sun arcs.
+            celestial.moonArcs.forEach(({ rise, transit, set }) => { const pts = hump(rise, set, transit); if (pts.length > 1) svg += `<polyline points="${poly(pts)}" fill="none" stroke="#C9D6E0" stroke-width="2" stroke-opacity="0.85" stroke-dasharray="4 3" stroke-linecap="round"/>`; });
+            celestial.sunArcs.forEach(({ rise, noon, set }) => { const pts = hump(rise, set, noon); if (pts.length > 1) svg += `<polyline points="${poly(pts)}" fill="none" stroke="#F2C96E" stroke-width="2.5" stroke-linecap="round"/>`; });
+
+            // Tide as a translucent water level over the lower sky.
+            const todayMid = parseEasternDateTime(getTodayDate() + ' 00:00').getTime();
+            const tev = (preds || []).map(p => ({ h: (parseEasternDateTime(p.t).getTime() - todayMid) / 3600000, v: parseFloat(p.v) }))
+                .filter(e => isFinite(e.h) && isFinite(e.v)).sort((a, b) => a.h - b.h);
+            let tideAtNow = null;
+            if (tev.length >= 2) {
+                const at = x => { if (x <= tev[0].h) return tev[0].v; for (let i = 0; i < tev.length - 1; i++) if (x >= tev[i].h && x <= tev[i + 1].h) { const f = (x - tev[i].h) / (tev[i + 1].h - tev[i].h); return tideHeightBetween(tev[i].v, tev[i + 1].v, f); } return tev[tev.length - 1].v; };
+                let vmin = Infinity, vmax = -Infinity; for (let x = winStart; x <= winEnd; x += 0.3) { const v = at(x); vmin = Math.min(vmin, v); vmax = Math.max(vmax, v); }
+                const pad = (vmax - vmin) * 0.08 || 0.5; vmin -= pad; vmax += pad;
+                const ySea = v => sceneBottom - ((v - vmin) / (vmax - vmin)) * (sceneBottom - seaTop);
+                const pts = []; for (let x = winStart; x <= winEnd; x += 0.3) pts.push([xOf(x), ySea(at(x))]);
+                const line = poly(pts);
+                svg += `<polygon points="${padX},${sceneBottom} ${line} ${W - padX},${sceneBottom}" fill="url(#water)" fill-opacity="0.6"/>`;
+                svg += `<polyline points="${line}" fill="none" stroke="#eaf3fa" stroke-width="2" stroke-opacity="0.9"/>`;
+                tideAtNow = ySea(at(nowH));
             }
+            if (tempF != null && isFinite(tempF)) svg += `<text x="${padX + 4}" y="${sceneBottom - 6}" font-family="Courier, monospace" font-size="12" fill="#dfeaf2">Water ${Math.round(tempF)}°F</text>`;
 
-            // Now line.
-            const nx = xOf(nowH).toFixed(1);
-            svg += `<line x1="${nx}" y1="4" x2="${nx}" y2="${horizon}" stroke="#ffffff" stroke-opacity="0.45" stroke-width="0.75" stroke-dasharray="2 2"/>`;
+            // Fixed center = now: line + top marker + label.
+            svg += `<line x1="${cx.toFixed(1)}" y1="4" x2="${cx.toFixed(1)}" y2="${sceneBottom}" stroke="#ffffff" stroke-opacity="0.85" stroke-width="1.25"/>
+                <polygon points="${(cx - 4).toFixed(1)},2 ${(cx + 4).toFixed(1)},2 ${cx.toFixed(1)},8" fill="#ffffff"/>
+                <text x="${cx.toFixed(1)}" y="${sceneBottom - 5}" text-anchor="middle" font-family="Courier, monospace" font-size="9" fill="#ffffff">now ${fmtHour(nowH)}</text>`;
 
-            // Moon marker (phase glyph) if the moon is currently up.
-            for (const [a, b, peak] of moonUpIntervals(moonrise, moonset, moonZenith)) {
-                const e = elevInHump(a, b, peak, nowH);
-                if (e != null) { svg += moonGlyph(parseFloat(nx), yOf(e), 7, phase); break; }
-            }
+            // Current sun / moon markers (on the center line, at their elevation now).
+            for (const { rise, transit, set } of celestial.moonArcs) { const e = elevInHump(rise, set, transit, nowH); if (e != null) { svg += moonGlyph(cx, ySky(e), 7, phase); break; } }
+            for (const { rise, noon, set } of celestial.sunArcs) { const e = elevInHump(rise, set, noon, nowH); if (e != null) { svg += `<circle cx="${cx.toFixed(1)}" cy="${ySky(e).toFixed(1)}" r="6" fill="#F4C95B" stroke="#E8A33D" stroke-width="1.5"/>`; break; } }
+            if (tideAtNow != null) svg += `<circle cx="${cx.toFixed(1)}" cy="${tideAtNow.toFixed(1)}" r="3" fill="#fff" stroke="#16324d"/>`;
 
-            // Sun marker if the sun is currently up.
-            if (sunrise != null && sunset != null) {
-                const peak = (noon != null) ? noon : (sunrise + sunset) / 2;
-                const e = elevInHump(sunrise, sunset, peak, nowH);
-                if (e != null) {
-                    const sy = yOf(e).toFixed(1);
-                    svg += `<circle cx="${nx}" cy="${sy}" r="6" fill="#F4C95B" stroke="#E8A33D" stroke-width="1.5"/>`;
-                }
-            }
+            // Bottom axis: the day's sun events within the window (two staggered rows).
+            svg += `<rect x="0" y="${sceneBottom}" width="${W}" height="${H - sceneBottom}" fill="#ffffff"/>`;
+            celestial.sunTicks.forEach(({ lab, h, row }) => { if (!inWin(h)) return; const xn = xOf(h); const ty = row === 0 ? sceneBottom + 13 : sceneBottom + 28;
+                let anchor = 'middle', tx = xn;                       // keep edge labels from clipping
+                if (xn < 28) { anchor = 'start'; tx = padX; } else if (xn > W - 28) { anchor = 'end'; tx = W - padX; }
+                svg += `<line x1="${xn.toFixed(1)}" y1="${sceneBottom}" x2="${xn.toFixed(1)}" y2="${sceneBottom + 5}" stroke="#3a4a57" stroke-width="0.75"/><text x="${tx.toFixed(1)}" y="${ty}" text-anchor="${anchor}" font-family="Courier, monospace" font-size="8.5" fill="#3a4a57">${lab} ${fmtHour(h)}</text>`; });
 
             return svg + '</svg>';
         }
@@ -610,14 +575,31 @@
             return `${hours} hours ${minutes} minutes`;
         }
 
-        function updateTideInfo(tideData, baseline) {
-            const tideInfoElement = document.getElementById('tideInfo').querySelector('.data-box');
+        // Renders the single unified "Today" card: the now-centered Sky & Sea scene
+        // plus all the textual data beneath it (moon phase + cycle %, the upcoming
+        // tide hi/los with comparator pills + countdown, and the full sun/moon time
+        // columns). `sunMoonToday` is today's USNO data; `celestial` is the
+        // multi-day model for the scene; `tempData` the latest water-temp reading.
+        function updateTodayInfo(tideData, baseline, sunMoonToday, celestial, tempData) {
+            const box = document.getElementById('todayInfo').querySelector('.data-box');
             const now = new Date();
             const tomorrow = getTomorrowDate();
             const preds = tideData.predictions;
+            const phase = parsePhase(sunMoonToday.curphase, sunMoonToday.fracillum);
+            const reading = tempData && tempData.data && tempData.data[0];
+            const tempF = reading ? parseFloat(reading.v) : null;
 
-            // The single highest high and lowest low of each calendar day, so those
-            // rows can be flagged inline with how they compare to a typical year.
+            // --- the unified scene ---
+            const sceneHTML = `<div class="scene">${buildSceneSvg(celestial, preds, phase, tempF)}</div>`;
+
+            // --- moon phase caption ---
+            const phaseCap = phase ? `
+                <div class="phase-cap">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">${moonGlyph(12, 12, 11, phase)}</svg>
+                    <span>${sunMoonToday.curphase} &middot; ${sunMoonToday.fracillum} lit</span>
+                </div>` : '';
+
+            // --- tide: countdown + next 4 hi/lo with comparator pills + note ---
             const dayExtremes = {};
             preds.forEach(p => {
                 const day = p.t.trim().split(/[ T]/)[0];
@@ -626,109 +608,49 @@
                 if (p.type === 'H') { if (!e.high || v > parseFloat(e.high.v)) e.high = p; }
                 else if (p.type === 'L') { if (!e.low || v < parseFloat(e.low.v)) e.low = p; }
             });
-
-            let futureTides = preds.filter(pred => parseEasternDateTime(pred.t) > now);
-            let nextTide = futureTides[0];
-
-            let tideHTML = `
-                <div class="data-item">
-                    <span class="data-label">${nextTide.type === 'H' ? 'High' : 'Low'} tide in:</span>
-                    <span>${getTimeUntilNextTide(nextTide)}</span>
-                </div>
-            `;
-
-            const wave = buildTideWaveSvg(preds, now);
-            if (wave) tideHTML += `<div class="tide-wave">${wave}</div>`;
-
-            futureTides.slice(0, 4).forEach((tide) => {
-                const day = tide.t.trim().split(/[ T]/)[0];
-                const isTomorrow = day === tomorrow;
-                const e = dayExtremes[day] || {};
-
-                // Flag a row only when it is its day's highest high or lowest low.
-                let pill = '';
-                if (baseline) {
-                    if (tide.type === 'H' && e.high && e.high.t === tide.t) {
-                        const verdict = classifyTide(parseFloat(tide.v), baseline.highs, 'high', baseline.datums);
-                        pill = ` <span class="pill ${verdict.cls}">${verdict.label}</span>`;
-                    } else if (tide.type === 'L' && e.low && e.low.t === tide.t) {
-                        const verdict = classifyTide(parseFloat(tide.v), baseline.lows, 'low', baseline.datums);
-                        pill = ` <span class="pill ${verdict.cls}">${verdict.label}</span>`;
+            const futureTides = preds.filter(pred => parseEasternDateTime(pred.t) > now);
+            let tideRows = '';
+            if (futureTides.length) {
+                const nextTide = futureTides[0];
+                tideRows += `<div class="data-item"><span class="data-label">${nextTide.type === 'H' ? 'High' : 'Low'} tide in:</span><span>${getTimeUntilNextTide(nextTide)}</span></div>`;
+                futureTides.slice(0, 4).forEach(tide => {
+                    const day = tide.t.trim().split(/[ T]/)[0];
+                    const isTomorrow = day === tomorrow;
+                    const e = dayExtremes[day] || {};
+                    let pill = '';
+                    if (baseline) {
+                        if (tide.type === 'H' && e.high && e.high.t === tide.t) { const v = classifyTide(parseFloat(tide.v), baseline.highs, 'high', baseline.datums); pill = ` <span class="pill ${v.cls}">${v.label}</span>`; }
+                        else if (tide.type === 'L' && e.low && e.low.t === tide.t) { const v = classifyTide(parseFloat(tide.v), baseline.lows, 'low', baseline.datums); pill = ` <span class="pill ${v.cls}">${v.label}</span>`; }
                     }
-                }
+                    tideRows += `<div class="data-item"><span class="data-label">${tide.type === 'H' ? 'High' : 'Low'}${isTomorrow ? '*' : ''}</span><span>(${parseFloat(tide.v).toFixed(2)}) ${formatTideTime(tide.t)}${pill}</span></div>`;
+                });
+                tideRows += `<div class="data-item note"><span>heights &amp; times estimated${preds.some(p => p.t.trim().split(/[ T]/)[0] === tomorrow) ? ' &middot; * = tomorrow' : ''}</span></div>`;
+            }
 
-                tideHTML += `
-                    <div class="data-item">
-                        <span class="data-label">${tide.type === 'H' ? 'High' : 'Low'}${isTomorrow ? '*' : ''}</span>
-                        <span>(${parseFloat(tide.v).toFixed(2)}) ${formatTideTime(tide.t)}${pill}</span>
-                    </div>
-                `;
-            });
-
-            tideHTML += `
-                <div class="data-item note">
-                    <span>heights &amp; times estimated for this location${preds.some(p => p.t.trim().split(/[ T]/)[0] === tomorrow) ? ' &middot; * = tomorrow' : ''}</span>
-                </div>
-            `;
-
-            tideInfoElement.innerHTML = tideHTML;
-            document.getElementById('tideInfo').style.display = 'block';
-        }
-
-        // Water temperature is shown as a compact chip on the Tide heading (there
-        // is no local sensor; the value comes from the nearest reporting station,
-        // named in the chip's tooltip). Hidden gracefully when unavailable.
-        function updateWaterTempInfo(tempData, sourceName) {
-            const chip = document.getElementById('tempChip');
-            const reading = tempData && tempData.data && tempData.data[0];
-            const v = reading ? parseFloat(reading.v) : NaN;
-            if (!isFinite(v)) { chip.style.display = 'none'; return; }
-            chip.textContent = `Water ${Math.round(v)}°F`;
-            chip.title = `Water temp ${v.toFixed(1)}°F · source: ${sourceName}`;
-            chip.style.display = 'inline-block';
-        }
-
-        function updateSunMoonInfo(sunMoonData) {
-            const box = document.getElementById('skyInfo').querySelector('.data-box');
-
-            const sunLabels = {
-                'Begin Civil Twilight': 'First Light',
-                'Upper Transit': 'Midday',
-                'End Civil Twilight': 'Last Light'
-            };
+            // --- full sun/moon time columns ---
+            const sunLabels = { 'Begin Civil Twilight': 'First Light', 'Upper Transit': 'Midday', 'End Civil Twilight': 'Last Light' };
             const sunOrder = ['Begin Civil Twilight', 'Rise', 'Upper Transit', 'Set', 'End Civil Twilight'];
             const moonLabels = { 'Rise': 'Rise', 'Upper Transit': 'Zenith', 'Set': 'Set' };
             const moonOrder = ['Rise', 'Upper Transit', 'Set'];
-
-            const sunByPhen = {}; (sunMoonData.sundata || []).forEach(i => sunByPhen[i.phen] = i.time);
-            const moonByPhen = {}; (sunMoonData.moondata || []).forEach(i => moonByPhen[i.phen] = i.time);
-
-            const row = (label, value) => `
-                <div class="data-item">
-                    <span class="data-label">${label}:</span>
-                    <span>${value || '—'}</span>
-                </div>`;
-
-            const sunRows = sunOrder.map(p => row(sunLabels[p] || p, sunByPhen[p])).join('');
-            const moonRows = moonOrder.map(p => row(moonLabels[p], moonByPhen[p])).join('');
-
-            const phase = parsePhase(sunMoonData.curphase, sunMoonData.fracillum);
-            const phaseCap = phase ? `
-                <div class="phase-cap">
-                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">${moonGlyph(12, 12, 11, phase)}</svg>
-                    <span>${sunMoonData.curphase} &middot; ${sunMoonData.fracillum} lit</span>
-                </div>` : '';
+            const sunBy = {}; (sunMoonToday.sundata || []).forEach(i => sunBy[i.phen] = i.time);
+            const moonBy = {}; (sunMoonToday.moondata || []).forEach(i => moonBy[i.phen] = i.time);
+            const row = (label, value) => `<div class="data-item"><span class="data-label">${label}:</span><span>${value || '—'}</span></div>`;
+            const sunRows = sunOrder.map(p => row(sunLabels[p] || p, sunBy[p])).join('');
+            const moonRows = moonOrder.map(p => row(moonLabels[p], moonBy[p])).join('');
+            const tempNote = (tempF != null && isFinite(tempF)) ? `<div class="data-item note"><span>water source: ${TEMP_STATION.name}</span></div>` : '';
 
             box.innerHTML = `
-                <div class="sky">${buildSkySvg(sunMoonData, easternNowHours())}</div>
+                ${sceneHTML}
                 ${phaseCap}
                 <div class="sky-cols">
                     <div><div class="col-head">☀ Sun</div>${sunRows}</div>
                     <div><div class="col-head">☾ Moon</div>${moonRows}</div>
                 </div>
+                <div class="divider"></div>
+                ${tideRows}
+                ${tempNote}
             `;
-
-            document.getElementById('skyInfo').style.display = 'block';
+            document.getElementById('todayInfo').style.display = 'block';
         }
 
         async function updateAllInfo() {
@@ -739,8 +661,10 @@
                 loadingElement.style.display = 'block';
                 errorElement.style.display = 'none';
 
-                const [sunMoonData, eastTide, westTide, tempData, pjBaseline, npDatums] = await Promise.all([
-                    fetchData(getSunMoonApiUrl()).then(data => data.properties.data),
+                const [smYest, smToday, smTomorrow, eastTide, westTide, tempData, pjBaseline, npDatums] = await Promise.all([
+                    fetchData(getSunMoonApiUrl(easternDateOffset(-1))).then(d => d.properties.data).catch(() => null),
+                    fetchData(getSunMoonApiUrl(getTodayDate())).then(d => d.properties.data),
+                    fetchData(getSunMoonApiUrl(easternDateOffset(1))).then(d => d.properties.data).catch(() => null),
                     fetchData(getTideApiUrl(EAST.id)),
                     fetchData(getTideApiUrl(WEST.id)),
                     fetchData(getWaterTempUrl(TEMP_STATION.id)).catch(() => null),
@@ -752,10 +676,9 @@
                 const baseline = pjBaseline
                     ? { highs: pjBaseline.highs, lows: pjBaseline.lows, datums: interpDatums(pjBaseline.datums, npDatums, W) }
                     : null;
+                const celestial = buildCelestial([{ off: -1, data: smYest }, { off: 0, data: smToday }, { off: 1, data: smTomorrow }]);
 
-                updateTideInfo(estimated, baseline);
-                updateWaterTempInfo(tempData, TEMP_STATION.name);
-                updateSunMoonInfo(sunMoonData);
+                updateTodayInfo(estimated, baseline, smToday, celestial, tempData);
                 updateCurrentDate();
                 updateLandscapeTime();
 
