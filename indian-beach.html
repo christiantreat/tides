@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <!-- Home-screen / installed-app branding. "Tide · Indian Beach" leads with
+         "Tide" so it surfaces when searching the phone. apple-mobile-web-app-title
+         sets the iOS home-screen label; the manifest sets it on Android/Chrome. -->
+    <meta name="apple-mobile-web-app-title" content="Tide · Indian Beach">
+    <meta name="theme-color" content="#05204A">
+    <link rel="manifest" href="indian-beach.webmanifest">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+    <title>Tide · Indian Beach</title>
+    <style>
+        body {
+            font-family: Courier, monospace;
+            background-color: #96ACB7;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            color: #05204A;
+        }
+        .app-container {
+            background-color: #05204A;
+            color: #E8EEF2;
+            border-radius: 40px;
+            box-shadow: 0 0 20px rgba(5, 32, 74, 0.2);
+            width: 100%;
+            max-width: 375px;
+            height: 100vh;
+            max-height: 812px;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+        .header-line { flex: none; display: flex; align-items: baseline; justify-content: flex-start; gap: 10px; margin-top: env(safe-area-inset-top); }
+        .location { font-size: 20px; font-weight: bold; letter-spacing: 1px; }
+        .current-date { font-size: 11px; white-space: nowrap; }
+        .note { font-size: 11px; opacity: 0.65; }
+        .scene { width: 100%; margin-bottom: 16px; line-height: 0; }
+        .scene svg { width: 100%; height: auto; display: block; border-radius: 8px; }
+        .divider { border-top: 1px solid rgba(232, 238, 242, 0.18); margin: 10px 0; }
+        .app-footer {
+            flex: none;
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 11px;
+            opacity: 0.7;
+            padding-top: 10px;
+            border-top: 1px solid rgba(232, 238, 242, 0.18);
+            margin-bottom: env(safe-area-inset-bottom);
+        }
+        .app-footer .footer-source { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .phase-cap { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; }
+        .phase-cap svg { width: 22px; height: 22px; flex: none; }
+        .sky-cols { display: flex; gap: 16px; }
+        .sky-cols > div { flex: 1; }
+        .sky-cols .col-head { font-weight: bold; margin-bottom: 4px; }
+        .data-section { width: 100%; margin: 0; flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; min-height: 0; overflow-y: auto; }
+        .data-section h2 { font-size: 18px; margin: 0 0 10px; }
+        .data-box {
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .data-item { display: flex; justify-content: space-between; gap: 6px; margin-bottom: 5px; }
+        .data-label { font-weight: bold; white-space: nowrap; }
+        .sky-cols { font-size: 13px; }
+        .pill { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px; font-weight: bold; white-space: nowrap; }
+        .pill.up2 { background: #E8896B; color: #2A0A02; }
+        .pill.up1 { background: #E8B58C; color: #3A1A08; }
+        .pill.mid { background: #9FB2C2; color: #0C1A2A; }
+        .pill.down1 { background: #7FA8D8; color: #07182E; }
+        .pill.down2 { background: #5C8FD6; color: #04122A; }
+        #loading, #error { text-align: center; font-size: 18px; }
+        /* In landscape the phone turns into a weather-station display: the
+           portrait app is hidden and a full-screen flex row takes over — the live
+           NWS radar on the left, and a slowly scrolling local text forecast on the
+           right (old "Local on the 8s" style). The wrapper is a direct child of
+           <body> so it can fill the whole viewport, unconstrained by the portrait
+           container's max-width. */
+        .landscape-view { display: none; }
+        .landscape-radar {
+            flex: 1 1 auto;
+            min-width: 0;
+            height: 100%;
+            object-fit: contain;
+            object-position: center center;   /* centered within its own (left) section */
+            background-color: #05204A;
+        }
+        /* Scrolling local forecast panel */
+        .landscape-forecast {
+            flex: 0 0 32%;
+            max-width: 340px;
+            height: 100%;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-color: #05204A;
+            color: #E8EEF2;
+            border-left: 1px solid rgba(232, 238, 242, 0.18);
+        }
+        .forecast-head {
+            flex: none;
+            font-weight: bold;
+            font-size: 15px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(232, 238, 242, 0.18);
+        }
+        /* Native scroll container so touch gestures work; auto-scroll is driven in
+           JS (requestAnimationFrame) and pauses while touched. The track holds two
+           copies of the forecast and JS wraps scrollTop within one copy for a
+           seamless loop. Scrollbar hidden for a clean station look. */
+        .forecast-viewport {
+            flex: 1 1 auto;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+        .forecast-viewport::-webkit-scrollbar { display: none; }
+        .forecast-scroll { padding: 0 14px; }
+        .forecast-period { padding: 13px 0; font-size: 13px; line-height: 1.55; }
+        .forecast-period .name { display: block; font-weight: bold; margin-bottom: 3px; }
+        @media (orientation: landscape) {
+            body { background-color: #05204A; }
+            .app-container { display: none; }
+            .landscape-view { display: flex; position: fixed; inset: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <div class="header-line">
+            <span class="location">Indian Beach</span>
+        </div>
+        <div id="loading">Loading data...</div>
+        <div id="error" style="display: none;"></div>
+        <div id="todayInfo" class="data-section" style="display: none;">
+            <div class="data-box"></div>
+        </div>
+        <div class="app-footer">
+            <span class="footer-source">Estimated tide &middot; Tillamook N. Jetty + Cape Disappointment</span>
+            <span class="current-date" id="currentDate"></span>
+        </div>
+    </div>
+    <!-- Landscape weather-station view (see CSS): live local NWS radar (KRTX,
+         Portland OR) on the left + a slowly scrolling NWS text forecast on the right.
+         Both load lazily the first time the phone enters landscape. -->
+    <div class="landscape-view" id="landscapeView">
+        <img class="landscape-radar" id="radarFrame" alt="Local NWS radar (KRTX)"
+             referrerpolicy="no-referrer">
+        <aside class="landscape-forecast" aria-label="Local text forecast">
+            <div class="forecast-head">Local Forecast</div>
+            <div class="forecast-viewport" id="forecastViewport">
+                <div class="forecast-scroll" id="forecastScroll"></div>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        // The Oregon coast is in the US Pacific time zone. Anchoring everything to
+        // this zone keeps the app accurate regardless of where it is viewed and
+        // automatically follows the PST/PDT daylight-savings switch.
+        const TIME_ZONE = 'America/Los_Angeles';
+
+        // NOAA has no tide station at Indian Beach (Ecola State Park, just north of
+        // Cannon Beach). We estimate its tide by linearly interpolating between the
+        // two nearest open-coast reference stations that bracket it along the shore —
+        // Tillamook Bay North Jetty to the south and Cape Disappointment to the north
+        // — by latitude, since this coastline runs north–south. This is a first-order
+        // estimate (the same idea NOAA's subordinate-station time/height offsets
+        // encode), not an official prediction, hence "Estimated".
+        const TARGET = { name: 'Indian Beach', lat: 45.9293, lon: -123.9756 };
+        const SOUTH = { id: '9437585', name: 'Tillamook Bay N. Jetty', lat: 45.57 };
+        const NORTH = { id: '9440581', name: 'Cape Disappointment', lat: 46.281 };
+        const TEMP_STATION = { id: '9435380', name: 'South Beach, Newport OR' };
+
+        // Blend weight toward the north anchor (0 = Tillamook Bay, 1 = Cape
+        // Disappointment), from where the target sits between the two stations'
+        // latitudes (~0.51).
+        const W = (TARGET.lat - SOUTH.lat) / (NORTH.lat - SOUTH.lat);
+
+        // Pacific Time's current UTC offset in whole hours (-8 during PST, -7
+        // during PDT). Derived from the date so daylight savings is handled for us.
+        function getZoneUtcOffset(date = new Date()) {
+            const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+            const zoneDate = new Date(date.toLocaleString('en-US', { timeZone: TIME_ZONE }));
+            return Math.round((zoneDate - utcDate) / (1000 * 60 * 60));
+        }
+
+        // Calendar date (YYYY-MM-DD) as it is in Pacific Time, not UTC. Using UTC
+        // here would roll over to "tomorrow" during the evening hours.
+        function getZoneDateString(date = new Date()) {
+            return date.toLocaleDateString('en-CA', { timeZone: TIME_ZONE });
+        }
+
+        // NOAA returns tide times as local wall-clock strings ("YYYY-MM-DD HH:MM")
+        // with no zone marker. Attach the correct Pacific offset so they parse to the
+        // right instant even when the viewing device is in another time zone.
+        function parseZoneDateTime(dateTimeString) {
+            const [datePart, timePart] = dateTimeString.trim().split(/[ T]/);
+            const offset = getZoneUtcOffset(new Date(`${datePart}T12:00:00Z`));
+            const sign = offset >= 0 ? '+' : '-';
+            const pad = String(Math.abs(offset)).padStart(2, '0');
+            return new Date(`${datePart}T${timePart}:00${sign}${pad}:00`);
+        }
+
+        function getTodayDate() {
+            return getZoneDateString();
+        }
+
+        function getTomorrowDate() {
+            return getZoneDateString(new Date(Date.now() + 24 * 60 * 60 * 1000));
+        }
+
+        function getSunMoonApiUrl(dateStr) {
+            const tz = getZoneUtcOffset();
+            return `https://aa.usno.navy.mil/api/rstt/oneday?date=${dateStr}&coords=${TARGET.lat},${TARGET.lon}&tz=${tz}&dst=false`;
+        }
+
+        // Pacific calendar date (YYYY-MM-DD) offset by N days from today.
+        function zoneDateOffset(days) {
+            return getZoneDateString(new Date(Date.now() + days * 24 * 60 * 60 * 1000));
+        }
+
+        function getTideApiUrl(stationId) {
+            // Yesterday → tomorrow, so the now-centered ±12h tide curve always has
+            // bracketing events even in the early morning or late evening.
+            const beginDate = zoneDateOffset(-1).replace(/-/g, '');
+            const endDate = getTomorrowDate().replace(/-/g, '');
+            return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=${stationId}&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
+        }
+
+        // Latest water-temperature observation. There is no sensor at the target;
+        // the nearest open-coast reporting station is South Beach (Newport), OR to
+        // the south, so the reading is labeled with its source, not presented as local.
+        function getWaterTempUrl(stationId) {
+            return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=water_temperature&application=NOS.COOPS.TAC.WL&date=latest&station=${stationId}&time_zone=lst_ldt&units=english&format=json`;
+        }
+
+        // --- Today vs. typical comparison ------------------------------------
+
+        function getDatumsApiUrl(stationId) {
+            return `https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/${stationId}/datums.json`;
+        }
+
+        // A full year of high/low predictions, ending today, for the 12-month
+        // percentile. Same URL shape as getTideApiUrl, just a wider date range.
+        function getTideStatsApiUrl(stationId) {
+            const beginDate = getZoneDateString(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)).replace(/-/g, '');
+            const endDate = getTodayDate().replace(/-/g, '');
+            return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=${stationId}&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
+        }
+
+        // Small persistent cache (localStorage) with an in-memory fallback for
+        // browsers that block storage, e.g. private mode. Values use JSON.
+        const memoryCache = {};
+        function cacheGet(key) {
+            try {
+                const raw = localStorage.getItem(key);
+                if (raw !== null) return JSON.parse(raw);
+            } catch (e) { /* storage unavailable */ }
+            return key in memoryCache ? memoryCache[key] : null;
+        }
+        function cacheSet(key, value) {
+            memoryCache[key] = value;
+            try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* ignore */ }
+        }
+
+        // NOAA's published tidal datums (long-term averages and astronomical
+        // extremes) only change once per ~19-year epoch, so they are cached for a
+        // long time. They are reported on the station datum; we convert to the MLLW
+        // reference the predictions use so they line up with predicted heights.
+        async function getStationDatums(stationId) {
+            const key = `tideDatums:${stationId}`;
+            const cached = cacheGet(key);
+            if (cached && (Date.now() - cached.fetchedAt) < 30 * 24 * 60 * 60 * 1000) {
+                return cached.datums;
+            }
+            const data = await fetchData(getDatumsApiUrl(stationId));
+            const byName = {};
+            (data.datums || []).forEach(d => { byName[d.name] = parseFloat(d.value); });
+            const mllw = byName.MLLW;
+            if (!isFinite(mllw)) throw new Error('Datums missing MLLW');
+            const toMllw = stnd => parseFloat(stnd) - mllw;
+            const datums = {
+                avgHigh: toMllw(byName.MHHW),   // mean higher-high water = average high tide
+                avgLow: 0,                       // MLLW is the prediction baseline (average low tide)
+                ceiling: toMllw(data.HAT),       // highest astronomical tide
+                floor: toMllw(data.LAT)          // lowest astronomical tide
+            };
+            cacheSet(key, { fetchedAt: Date.now(), datums });
+            return datums;
+        }
+
+        // Percentage of values in arr strictly less than value (0-100), or null.
+        function percentileOf(value, arr) {
+            if (!arr.length) return null;
+            const below = arr.reduce((n, v) => n + (v < value ? 1 : 0), 0);
+            return Math.round((below / arr.length) * 100);
+        }
+
+        // Classifies a tide height against the past year's distribution of that
+        // tide type (and the astronomical extreme from the datums). Arrows track
+        // the water level versus a normal tide of that type — both for highs and
+        // lows — so a deep low reads ↓↓ and a barely-there low reads ↑↑. Colour
+        // matches: blue = lower water, red = higher water.
+        function classifyTide(value, arr, kind, datums) {
+            const pct = percentileOf(value, arr);
+            const nearTop = datums && kind === 'high' && isFinite(datums.ceiling) && Math.abs(value - datums.ceiling) <= 0.5;
+            const nearBottom = datums && kind === 'low' && isFinite(datums.floor) && Math.abs(value - datums.floor) <= 0.5;
+
+            let cls;
+            if (nearTop || (pct !== null && pct >= 90)) cls = 'up2';
+            else if (nearBottom || (pct !== null && pct <= 10)) cls = 'down2';
+            else if (pct === null) cls = 'mid';
+            else if (pct >= 67) cls = 'up1';
+            else if (pct <= 33) cls = 'down1';
+            else cls = 'mid';
+
+            const labels = { up2: '↑↑', up1: '↑', mid: '≈', down1: '↓', down2: '↓↓' };
+            return { label: labels[cls], cls };
+        }
+
+        // The 12-month baseline used to judge how high/low a tide is: every high
+        // and low height from the past year, plus the station datums. Fetched at
+        // most once per day (cached); the datums fetch degrades gracefully so an
+        // outage still yields percentile-based verdicts. Returns null on failure.
+        async function getTideBaseline(stationId) {
+            const key = `tideBaseline:${stationId}:${getTodayDate()}`;
+            const cached = cacheGet(key);
+            if (cached) return cached;
+            const [statsData, datums] = await Promise.all([
+                fetchData(getTideStatsApiUrl(stationId)),
+                getStationDatums(stationId).catch(() => null)
+            ]);
+            const highs = [], lows = [];
+            ((statsData && statsData.predictions) || []).forEach(p => {
+                const v = parseFloat(p.v);
+                if (!isFinite(v)) return;
+                if (p.type === 'H') highs.push(v);
+                else if (p.type === 'L') lows.push(v);
+            });
+            if (!highs.length || !lows.length) return null;
+            const baseline = { highs, lows, datums };
+            cacheSet(key, baseline);
+            return baseline;
+        }
+
+        // Pacific wall-clock stamp ("YYYY-MM-DD HH:MM") for a Date, matching the
+        // format NOAA returns so the interpolated events flow through the same
+        // parseZoneDateTime / formatTideTime / day-extreme code as raw ones.
+        function toZoneStamp(date) {
+            const d = date.toLocaleDateString('en-CA', { timeZone: TIME_ZONE });
+            const t = date.toLocaleTimeString('en-GB', { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false });
+            return `${d} ${t}`;
+        }
+
+        // Estimate the target's high/low tides by interpolating between the two
+        // anchor stations. Each south (Tillamook Bay) event is matched to the
+        // nearest same-type north (Cape Disappointment) event within 3h, then both
+        // its time and height are blended by weight w (0 = south, 1 = north). A south
+        // event with no nearby north match is dropped rather than reported unblended.
+        function estimateTides(southPreds, northPreds, w) {
+            const north = (northPreds || []).map(p => ({
+                type: p.type, ms: parseZoneDateTime(p.t).getTime(), v: parseFloat(p.v)
+            }));
+            const out = [];
+            (southPreds || []).forEach(pe => {
+                const me = parseZoneDateTime(pe.t).getTime();
+                const ve = parseFloat(pe.v);
+                if (!isFinite(me) || !isFinite(ve)) return;
+                let best = null, bestDiff = Infinity;
+                north.forEach(pw => {
+                    if (pw.type !== pe.type) return;
+                    const diff = Math.abs(pw.ms - me);
+                    if (diff < bestDiff) { bestDiff = diff; best = pw; }
+                });
+                if (!best || bestDiff > 3 * 60 * 60 * 1000) return;
+                const ms = me + w * (best.ms - me);
+                const v = ve + w * (best.v - ve);
+                out.push({ t: toZoneStamp(new Date(ms)), v: v.toFixed(3), type: pe.type });
+            });
+            out.sort((a, b) => parseZoneDateTime(a.t) - parseZoneDateTime(b.t));
+            return { predictions: out };
+        }
+
+        // Blend two stations' datums for the target point. If only one side is
+        // available it is used as-is; if neither is, returns null (the verdict then
+        // falls back to percentile-only, which classifyTide already handles).
+        function interpDatums(dS, dN, w) {
+            if (!dS && !dN) return null;
+            if (!dS) return dN;
+            if (!dN) return dS;
+            const blend = (a, b) => (isFinite(a) && isFinite(b)) ? a + w * (b - a) : (isFinite(a) ? a : b);
+            return {
+                avgHigh: blend(dS.avgHigh, dN.avgHigh),
+                avgLow: blend(dS.avgLow, dN.avgLow),
+                ceiling: blend(dS.ceiling, dN.ceiling),
+                floor: blend(dS.floor, dN.floor)
+            };
+        }
+
+        // Between two consecutive high/low events the tide is well approximated by
+        // a half-cosine; f in [0,1] is the fraction of time elapsed from v0 to v1.
+        function tideHeightBetween(v0, v1, f) {
+            return v0 + (v1 - v0) * (1 - Math.cos(Math.PI * f)) / 2;
+        }
+
+        // --- Sun & Moon + tide "Sky & Sea" scene -----------------------------
+
+        // "HH:MM" -> fractional hours (e.g. "12:51" -> 12.85), or null if absent.
+        function parseHM(t) {
+            if (!t) return null;
+            const m = /^(\d{1,2}):(\d{2})/.exec(t.trim());
+            return m ? parseInt(m[1], 10) + parseInt(m[2], 10) / 60 : null;
+        }
+
+        // Current Pacific time as fractional hours in [0,24).
+        function zoneNowHours() {
+            const s = new Date().toLocaleTimeString('en-GB', { timeZone: TIME_ZONE, hour12: false, hour: '2-digit', minute: '2-digit' });
+            return parseHM(s) || 0;
+        }
+
+        // Moon phase as { k: lit fraction 0..1, waxing: bool } from the USNO
+        // curphase/fracillum strings, or null when unavailable.
+        function parsePhase(curphase, fracillum) {
+            if (!curphase || !fracillum) return null;
+            const k = parseFloat(fracillum) / 100;
+            if (!isFinite(k)) return null;
+            return { k, waxing: /Waxing|First Quarter|New/.test(curphase) };
+        }
+
+        // Builds a continuous celestial model in "hours from today's midnight" from
+        // several days of USNO data ([{off:-1,data},{off:0,data},{off:1,data}]). The
+        // scene is centered on now and can show times from the prior/next day, so we
+        // need adjacent days to draw day/night bands and to pair each moonrise with
+        // its TRUE next moonset — giving one smooth overnight moon arc instead of an
+        // arc clipped to the horizon at midnight.
+        function buildCelestial(days) {
+            const bands = [], sunArcs = [], sunTicks = [];
+            const rises = [], sets = [], transits = [];
+            days.forEach(({ off, data }) => {
+                if (!data) return;
+                const o = off * 24;
+                const sd = {}; (data.sundata || []).forEach(i => sd[i.phen] = i.time);
+                const md = {}; (data.moondata || []).forEach(i => md[i.phen] = i.time);
+                const fl = parseHM(sd['Begin Civil Twilight']), sr = parseHM(sd['Rise']),
+                      nn = parseHM(sd['Upper Transit']), ss = parseHM(sd['Set']), ll = parseHM(sd['End Civil Twilight']);
+                if (fl != null && sr != null) bands.push({ a: fl + o, b: sr + o, fill: 'url(#dawn)' });
+                if (sr != null && ss != null) bands.push({ a: sr + o, b: ss + o, fill: '#bcd6e6' });
+                if (ss != null && ll != null) bands.push({ a: ss + o, b: ll + o, fill: 'url(#dusk)' });
+                if (sr != null && ss != null) sunArcs.push({ rise: sr + o, noon: (nn != null ? nn : (sr + ss) / 2) + o, set: ss + o });
+                if (fl != null) sunTicks.push({ lab: 'first', h: fl + o, row: 0 });
+                if (sr != null) sunTicks.push({ lab: '↑', h: sr + o, row: 1 });
+                if (ss != null) sunTicks.push({ lab: '↓', h: ss + o, row: 0 });
+                if (ll != null) sunTicks.push({ lab: 'last', h: ll + o, row: 1 });
+                const mr = parseHM(md['Rise']), mt = parseHM(md['Upper Transit']), ms = parseHM(md['Set']);
+                if (mr != null) rises.push(mr + o);
+                if (ms != null) sets.push(ms + o);
+                if (mt != null) transits.push(mt + o);
+            });
+            // Pair each moonrise with the next moonset; transit between them (or midpoint).
+            rises.sort((a, b) => a - b); sets.sort((a, b) => a - b);
+            const bySet = {};
+            rises.forEach(r => {
+                const s = sets.find(x => x > r); if (s == null) return;
+                const t = transits.find(x => x > r && x < s);
+                const arc = { rise: r, transit: (t != null ? t : (r + s) / 2), set: s };
+                if (bySet[s] == null || r > bySet[s].rise) bySet[s] = arc;  // closest rise before the set
+            });
+            const moonArcs = Object.values(bySet).sort((a, b) => a.rise - b.rise);
+            return { bands, sunArcs, sunTicks, moonArcs };
+        }
+
+        // Elevation 0..1 of a body at hour h within a hump [a,b] peaking at `peak`
+        // (smooth half-cosines, reusing tideHeightBetween), or null if outside.
+        function elevInHump(a, b, peak, h) {
+            if (h < a || h > b) return null;
+            if (peak <= a) return tideHeightBetween(1, 0, (h - a) / (b - a || 1));
+            if (peak >= b) return tideHeightBetween(0, 1, (h - a) / (b - a || 1));
+            return h <= peak ? tideHeightBetween(0, 1, (h - a) / (peak - a || 1))
+                             : tideHeightBetween(1, 0, (h - peak) / (b - peak || 1));
+        }
+
+        // Path for the LIT portion of the moon disc: outer limb semicircle on the
+        // lit side joined to the terminator semi-ellipse. rx collapses to 0 at the
+        // quarters (straight terminator) and to R at new/full (full semicircle).
+        function moonPhasePath(cx, cy, R, k, waxing) {
+            const rx = (R * Math.abs(1 - 2 * k)).toFixed(2);
+            const limbSweep = waxing ? 1 : 0;
+            const termSweep = waxing ? (k > 0.5 ? 1 : 0) : (k > 0.5 ? 0 : 1);
+            const top = `${cx} ${cy - R}`, bot = `${cx} ${cy + R}`;
+            return `M ${top} A ${R} ${R} 0 0 ${limbSweep} ${bot} A ${rx} ${R} 0 0 ${termSweep} ${top} Z`;
+        }
+
+        // A moon glyph: dark disc, the lit area for the given phase, and a faint ring.
+        function moonGlyph(cx, cy, R, phase) {
+            const base = `<circle cx="${cx}" cy="${cy}" r="${R}" fill="#1d2c45"/>`;
+            const lit = (phase && phase.k > 0.02)
+                ? `<path d="${moonPhasePath(cx, cy, R, phase.k, phase.waxing)}" fill="#E8EEF2"/>` : '';
+            const ring = `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="#C9D6E0" stroke-width="0.75" stroke-opacity="0.6"/>`;
+            return base + lit + ring;
+        }
+
+        // "HH:MM" label for an absolute hour (handles values <0 or >24).
+        function fmtHour(absH) {
+            const h = ((Math.floor(absH) % 24) + 24) % 24;
+            const m = Math.round((absH - Math.floor(absH)) * 60);
+            return `${String(h).padStart(2, '0')}:${String(m === 60 ? 0 : m).padStart(2, '0')}`;
+        }
+
+        // The now-centered "Sky & Sea" scene: a 24h window centered on the current
+        // time (fixed center line). The sun/moon arcs and the tide water all scroll
+        // past the center as time advances; the day/night shading scrolls with them.
+        // The tide is a translucent water level rising over the lower sky; the sun's
+        // day events sit on a bottom axis. `celestial` from buildCelestial; `preds`
+        // are estimated tide hi/los; `phase` from parsePhase; `tempF` a number/null.
+        function buildSceneSvg(celestial, preds, phase, tempF) {
+            const nowH = zoneNowHours();
+            const Twin = 24, winStart = nowH - Twin / 2, winEnd = nowH + Twin / 2;
+            const W = 320, padX = 6, H = 196, sceneBottom = 158, arcBaseline = 138, arcTop = 14, seaTop = 72;
+            const xOf = t => padX + ((t - winStart) / Twin) * (W - 2 * padX);
+            const inWin = t => t >= winStart && t <= winEnd;
+            const clip = x => Math.max(padX, Math.min(W - padX, x));
+            const ySky = e => arcBaseline - e * (arcBaseline - arcTop);
+            const cx = xOf(nowH);
+            const poly = pts => pts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+            const hump = (a, b, peak) => { const pts = []; for (let i = 0; i <= 48; i++) { const h = a + (b - a) * i / 48; if (inWin(h)) pts.push([xOf(h), ySky(elevInHump(a, b, peak, h))]); } return pts; };
+
+            let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sun, moon and tide centered on now">
+                <defs>
+                    <linearGradient id="dawn" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#05204A"/><stop offset="1" stop-color="#bcd6e6"/></linearGradient>
+                    <linearGradient id="dusk" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#bcd6e6"/><stop offset="1" stop-color="#05204A"/></linearGradient>
+                    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b86a6"/><stop offset="1" stop-color="#16324d"/></linearGradient>
+                </defs>
+                <rect x="0" y="0" width="${W}" height="${sceneBottom}" fill="#05204A"/>`;
+
+            // Day/twilight bands (scroll with time), clipped to the window.
+            celestial.bands.forEach(({ a, b, fill }) => { const x1 = clip(xOf(a)), x2 = clip(xOf(b)); if (x2 > x1) svg += `<rect x="${x1.toFixed(1)}" y="0" width="${(x2 - x1).toFixed(1)}" height="${sceneBottom}" fill="${fill}"/>`; });
+
+            // Continuous moon arcs, then sun arcs.
+            celestial.moonArcs.forEach(({ rise, transit, set }) => { const pts = hump(rise, set, transit); if (pts.length > 1) svg += `<polyline points="${poly(pts)}" fill="none" stroke="#C9D6E0" stroke-width="2" stroke-opacity="0.85" stroke-dasharray="4 3" stroke-linecap="round"/>`; });
+            celestial.sunArcs.forEach(({ rise, noon, set }) => { const pts = hump(rise, set, noon); if (pts.length > 1) svg += `<polyline points="${poly(pts)}" fill="none" stroke="#F2C96E" stroke-width="2.5" stroke-linecap="round"/>`; });
+
+            // Tide as a translucent water level over the lower sky.
+            const todayMid = parseZoneDateTime(getTodayDate() + ' 00:00').getTime();
+            const tev = (preds || []).map(p => ({ h: (parseZoneDateTime(p.t).getTime() - todayMid) / 3600000, v: parseFloat(p.v) }))
+                .filter(e => isFinite(e.h) && isFinite(e.v)).sort((a, b) => a.h - b.h);
+            let tideAtNow = null;
+            if (tev.length >= 2) {
+                const at = x => { if (x <= tev[0].h) return tev[0].v; for (let i = 0; i < tev.length - 1; i++) if (x >= tev[i].h && x <= tev[i + 1].h) { const f = (x - tev[i].h) / (tev[i + 1].h - tev[i].h); return tideHeightBetween(tev[i].v, tev[i + 1].v, f); } return tev[tev.length - 1].v; };
+                let vmin = Infinity, vmax = -Infinity; for (let x = winStart; x <= winEnd; x += 0.3) { const v = at(x); vmin = Math.min(vmin, v); vmax = Math.max(vmax, v); }
+                const pad = (vmax - vmin) * 0.08 || 0.5; vmin -= pad; vmax += pad;
+                const ySea = v => sceneBottom - ((v - vmin) / (vmax - vmin)) * (sceneBottom - seaTop);
+                const pts = []; for (let x = winStart; x <= winEnd; x += 0.3) pts.push([xOf(x), ySea(at(x))]);
+                const line = poly(pts);
+                svg += `<polygon points="${padX},${sceneBottom} ${line} ${W - padX},${sceneBottom}" fill="url(#water)" fill-opacity="0.6"/>`;
+                svg += `<polyline points="${line}" fill="none" stroke="#eaf3fa" stroke-width="2" stroke-opacity="0.9"/>`;
+                tideAtNow = ySea(at(nowH));
+            }
+            if (tempF != null && isFinite(tempF)) svg += `<text x="${padX + 4}" y="${sceneBottom - 6}" font-family="Courier, monospace" font-size="12" fill="#dfeaf2">Water ${Math.round(tempF)}°F</text>`;
+
+            // Fixed center = now: line + top marker + label.
+            svg += `<line x1="${cx.toFixed(1)}" y1="4" x2="${cx.toFixed(1)}" y2="${sceneBottom}" stroke="#ffffff" stroke-opacity="0.85" stroke-width="1.25"/>
+                <polygon points="${(cx - 4).toFixed(1)},2 ${(cx + 4).toFixed(1)},2 ${cx.toFixed(1)},8" fill="#ffffff"/>
+                <text x="${cx.toFixed(1)}" y="${sceneBottom - 5}" text-anchor="middle" font-family="Courier, monospace" font-size="9" fill="#ffffff">now ${fmtHour(nowH)}</text>`;
+
+            // Current sun / moon markers (on the center line, at their elevation now).
+            for (const { rise, transit, set } of celestial.moonArcs) { const e = elevInHump(rise, set, transit, nowH); if (e != null) { svg += moonGlyph(cx, ySky(e), 7, phase); break; } }
+            for (const { rise, noon, set } of celestial.sunArcs) { const e = elevInHump(rise, set, noon, nowH); if (e != null) { svg += `<circle cx="${cx.toFixed(1)}" cy="${ySky(e).toFixed(1)}" r="6" fill="#F4C95B" stroke="#E8A33D" stroke-width="1.5"/>`; break; } }
+            if (tideAtNow != null) svg += `<circle cx="${cx.toFixed(1)}" cy="${tideAtNow.toFixed(1)}" r="3" fill="#fff" stroke="#16324d"/>`;
+
+            // Bottom axis: the day's sun events within the window (two staggered rows).
+            svg += `<rect x="0" y="${sceneBottom}" width="${W}" height="${H - sceneBottom}" fill="#ffffff"/>`;
+            celestial.sunTicks.forEach(({ lab, h, row }) => { if (!inWin(h)) return; const xn = xOf(h); const ty = row === 0 ? sceneBottom + 13 : sceneBottom + 28;
+                let anchor = 'middle', tx = xn;                       // keep edge labels from clipping
+                if (xn < 28) { anchor = 'start'; tx = padX; } else if (xn > W - 28) { anchor = 'end'; tx = W - padX; }
+                svg += `<line x1="${xn.toFixed(1)}" y1="${sceneBottom}" x2="${xn.toFixed(1)}" y2="${sceneBottom + 5}" stroke="#3a4a57" stroke-width="0.75"/><text x="${tx.toFixed(1)}" y="${ty}" text-anchor="${anchor}" font-family="Courier, monospace" font-size="8.5" fill="#3a4a57">${lab} ${fmtHour(h)}</text>`; });
+
+            return svg + '</svg>';
+        }
+
+        function enableFullScreen() {
+            const elem = document.documentElement;
+            (elem.requestFullscreen || elem.webkitRequestFullscreen).call(elem);
+        }
+
+        window.addEventListener('load', () => {
+            const isIPhone = /iPhone/i.test(navigator.userAgent) && !window.MSStream;
+            if (isIPhone) {
+                if (!navigator.standalone) {
+                    alert("To use this app in full-screen mode, please add it to your home screen.");
+                } else {
+                    enableFullScreen();
+                }
+            }
+            updateCurrentDate();
+            refreshLandscape();
+        });
+
+        async function fetchData(url) {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            return response.json();
+        }
+
+        function updateCurrentDate() {
+            document.getElementById('currentDate').textContent = new Date().toLocaleDateString(undefined, { timeZone: TIME_ZONE, weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+        }
+
+        // The landscape radar + forecast load lazily and stay fresh: nothing is
+        // fetched while the phone is in portrait. The radar's cache-busting
+        // timestamp pulls the newest scan on each refresh. KRTX is the NWS Portland,
+        // OR site (radar), PQR grid 75,131 the NWS forecast cell, both centered on
+        // the target area.
+        const RADAR_URL = 'https://radar.weather.gov/ridge/standard/KRTX_loop.gif';
+        const FORECAST_URL = 'https://api.weather.gov/gridpoints/PQR/75,131/forecast';
+        const landscapeMediaQuery = window.matchMedia('(orientation: landscape)');
+
+        function refreshRadar() {
+            if (!landscapeMediaQuery.matches) return;   // never fetch in portrait
+            document.getElementById('radarFrame').src = RADAR_URL + '?t=' + Date.now();
+        }
+
+        // Fetches the NWS local forecast and feeds the scrolling panel. The track
+        // holds two copies of the forecast so the CSS translateY(-50%) loop is
+        // seamless; the animation duration is derived from the measured height to
+        // keep a constant, very slow scroll. Refetched at most every 30 min (the
+        // forecast changes slowly); failures leave the previous forecast in place.
+        let forecastFetchedAt = 0;
+        async function refreshForecast() {
+            if (!landscapeMediaQuery.matches) return;
+            const scroll = document.getElementById('forecastScroll');
+            if (scroll.children.length && Date.now() - forecastFetchedAt < 30 * 60 * 1000) return;
+            try {
+                const data = await fetchData(FORECAST_URL);
+                const periods = (data.properties && data.properties.periods) || [];
+                if (!periods.length) return;
+                const html = periods.map(p =>
+                    `<div class="forecast-period"><span class="name">${p.name}</span>${p.detailedForecast}</div>`
+                ).join('');
+                scroll.innerHTML = html + html;   // two copies for a seamless loop
+                forecastFetchedAt = Date.now();
+            } catch (e) { /* keep showing the previous forecast */ }
+        }
+
+        function refreshLandscape() { refreshRadar(); refreshForecast(); }
+        landscapeMediaQuery.addEventListener('change', refreshLandscape);
+
+        // Auto-scroll the forecast slowly upward, but let touch take over: any
+        // user interaction pauses the auto-scroll, which resumes a couple seconds
+        // after they let go. Native scrolling provides momentum + manual control;
+        // a rAF loop nudges scrollTop when idle and wraps within the duplicated
+        // content (scrollTop >= one copy → subtract a copy) for a seamless loop.
+        const FORECAST_SPEED = 16;   // px/sec, very slow
+        let forecastPaused = false, forecastResumeTimer = null, forecastLastTs = 0;
+        function forecastTick(ts) {
+            const vp = document.getElementById('forecastViewport');
+            const half = vp ? vp.scrollHeight / 2 : 0;
+            if (half > 0) {
+                if (!forecastPaused && forecastLastTs) vp.scrollTop += FORECAST_SPEED * (ts - forecastLastTs) / 1000;
+                if (vp.scrollTop >= half) vp.scrollTop -= half;   // seamless wrap
+            }
+            forecastLastTs = ts;
+            requestAnimationFrame(forecastTick);
+        }
+        function pauseForecast() { forecastPaused = true; clearTimeout(forecastResumeTimer); }
+        function resumeForecastSoon() { clearTimeout(forecastResumeTimer); forecastResumeTimer = setTimeout(() => { forecastPaused = false; }, 2500); }
+        (function initForecastScroll() {
+            const vp = document.getElementById('forecastViewport');
+            if (!vp) return;
+            ['touchstart', 'pointerdown'].forEach(ev => vp.addEventListener(ev, pauseForecast, { passive: true }));
+            ['touchend', 'pointerup', 'pointercancel', 'mouseleave'].forEach(ev => vp.addEventListener(ev, resumeForecastSoon, { passive: true }));
+            vp.addEventListener('wheel', () => { pauseForecast(); resumeForecastSoon(); }, { passive: true });
+            requestAnimationFrame(forecastTick);
+        })();
+
+        function formatTideTime(dateTimeString) {
+            return parseZoneDateTime(dateTimeString).toLocaleTimeString([], { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false });
+        }
+
+        function getTimeUntilNextTide(nextTide) {
+            const now = new Date();
+            const tideTime = parseZoneDateTime(nextTide.t);
+            const timeDiff = tideTime - now;
+            const hours = Math.floor(timeDiff / (1000 * 60 * 60));
+            const minutes = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
+            return `${hours} hours ${minutes} minutes`;
+        }
+
+        // Renders the single unified "Today" card: the now-centered Sky & Sea scene
+        // plus all the textual data beneath it (moon phase + cycle %, the upcoming
+        // tide hi/los with comparator pills + countdown, and the full sun/moon time
+        // columns). `sunMoonToday` is today's USNO data; `celestial` is the
+        // multi-day model for the scene; `tempData` the latest water-temp reading.
+        function updateTodayInfo(tideData, baseline, sunMoonToday, celestial, tempData) {
+            const box = document.getElementById('todayInfo').querySelector('.data-box');
+            const now = new Date();
+            const tomorrow = getTomorrowDate();
+            const preds = tideData.predictions;
+            const phase = parsePhase(sunMoonToday.curphase, sunMoonToday.fracillum);
+            const reading = tempData && tempData.data && tempData.data[0];
+            const tempF = reading ? parseFloat(reading.v) : null;
+
+            // --- the unified scene ---
+            const sceneHTML = `<div class="scene">${buildSceneSvg(celestial, preds, phase, tempF)}</div>`;
+
+            // --- moon phase caption ---
+            const phaseCap = phase ? `
+                <div class="phase-cap">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">${moonGlyph(12, 12, 11, phase)}</svg>
+                    <span>${sunMoonToday.curphase} &middot; ${sunMoonToday.fracillum} lit</span>
+                </div>` : '';
+
+            // --- tide: countdown + next 4 hi/lo with comparator pills + note ---
+            const dayExtremes = {};
+            preds.forEach(p => {
+                const day = p.t.trim().split(/[ T]/)[0];
+                const e = dayExtremes[day] || (dayExtremes[day] = {});
+                const v = parseFloat(p.v);
+                if (p.type === 'H') { if (!e.high || v > parseFloat(e.high.v)) e.high = p; }
+                else if (p.type === 'L') { if (!e.low || v < parseFloat(e.low.v)) e.low = p; }
+            });
+            const futureTides = preds.filter(pred => parseZoneDateTime(pred.t) > now);
+            let tideRows = '';
+            if (futureTides.length) {
+                const nextTide = futureTides[0];
+                tideRows += `<div class="data-item"><span class="data-label">${nextTide.type === 'H' ? 'High' : 'Low'} tide in:</span><span>${getTimeUntilNextTide(nextTide)}</span></div>`;
+                futureTides.slice(0, 4).forEach(tide => {
+                    const day = tide.t.trim().split(/[ T]/)[0];
+                    const isTomorrow = day === tomorrow;
+                    const e = dayExtremes[day] || {};
+                    let pill = '';
+                    if (baseline) {
+                        if (tide.type === 'H' && e.high && e.high.t === tide.t) { const v = classifyTide(parseFloat(tide.v), baseline.highs, 'high', baseline.datums); pill = ` <span class="pill ${v.cls}">${v.label}</span>`; }
+                        else if (tide.type === 'L' && e.low && e.low.t === tide.t) { const v = classifyTide(parseFloat(tide.v), baseline.lows, 'low', baseline.datums); pill = ` <span class="pill ${v.cls}">${v.label}</span>`; }
+                    }
+                    tideRows += `<div class="data-item"><span class="data-label">${tide.type === 'H' ? 'High' : 'Low'}${isTomorrow ? '*' : ''}</span><span>(${parseFloat(tide.v).toFixed(2)}) ${formatTideTime(tide.t)}${pill}</span></div>`;
+                });
+                tideRows += `<div class="data-item note"><span>heights &amp; times estimated${preds.some(p => p.t.trim().split(/[ T]/)[0] === tomorrow) ? ' &middot; * = tomorrow' : ''}</span></div>`;
+            }
+
+            // --- full sun/moon time columns ---
+            const sunLabels = { 'Begin Civil Twilight': 'First Light', 'Upper Transit': 'Midday', 'End Civil Twilight': 'Last Light' };
+            const sunOrder = ['Begin Civil Twilight', 'Rise', 'Upper Transit', 'Set', 'End Civil Twilight'];
+            const moonLabels = { 'Rise': 'Rise', 'Upper Transit': 'Zenith', 'Set': 'Set' };
+            const moonOrder = ['Rise', 'Upper Transit', 'Set'];
+            const sunBy = {}; (sunMoonToday.sundata || []).forEach(i => sunBy[i.phen] = i.time);
+            const moonBy = {}; (sunMoonToday.moondata || []).forEach(i => moonBy[i.phen] = i.time);
+            const row = (label, value) => `<div class="data-item"><span class="data-label">${label}:</span><span>${value || '—'}</span></div>`;
+            const sunRows = sunOrder.map(p => row(sunLabels[p] || p, sunBy[p])).join('');
+            const moonRows = moonOrder.map(p => row(moonLabels[p], moonBy[p])).join('');
+            const tempNote = (tempF != null && isFinite(tempF)) ? `<div class="data-item note"><span>water source: ${TEMP_STATION.name}</span></div>` : '';
+
+            box.innerHTML = `
+                ${sceneHTML}
+                ${phaseCap}
+                <div class="sky-cols">
+                    <div><div class="col-head">☀ Sun</div>${sunRows}</div>
+                    <div><div class="col-head">☾ Moon</div>${moonRows}</div>
+                </div>
+                <div class="divider"></div>
+                ${tideRows}
+                ${tempNote}
+            `;
+            document.getElementById('todayInfo').style.display = 'flex';
+        }
+
+        async function updateAllInfo() {
+            const loadingElement = document.getElementById('loading');
+            const errorElement = document.getElementById('error');
+
+            try {
+                loadingElement.style.display = 'block';
+                errorElement.style.display = 'none';
+
+                const [smYest, smToday, smTomorrow, southTide, northTide, tempData, southBaseline, northDatums] = await Promise.all([
+                    fetchData(getSunMoonApiUrl(zoneDateOffset(-1))).then(d => d.properties.data).catch(() => null),
+                    fetchData(getSunMoonApiUrl(getTodayDate())).then(d => d.properties.data),
+                    fetchData(getSunMoonApiUrl(zoneDateOffset(1))).then(d => d.properties.data).catch(() => null),
+                    fetchData(getTideApiUrl(SOUTH.id)),
+                    fetchData(getTideApiUrl(NORTH.id)),
+                    fetchData(getWaterTempUrl(TEMP_STATION.id)).catch(() => null),
+                    getTideBaseline(SOUTH.id).catch(() => null),
+                    getStationDatums(NORTH.id).catch(() => null)
+                ]);
+
+                const estimated = estimateTides(southTide.predictions, northTide.predictions, W);
+                const baseline = southBaseline
+                    ? { highs: southBaseline.highs, lows: southBaseline.lows, datums: interpDatums(southBaseline.datums, northDatums, W) }
+                    : null;
+                const celestial = buildCelestial([{ off: -1, data: smYest }, { off: 0, data: smToday }, { off: 1, data: smTomorrow }]);
+
+                updateTodayInfo(estimated, baseline, smToday, celestial, tempData);
+                updateCurrentDate();
+                refreshLandscape();
+
+                loadingElement.style.display = 'none';
+            } catch (error) {
+                loadingElement.style.display = 'none';
+                errorElement.style.display = 'block';
+                errorElement.textContent = 'Failed to load data. Please try again later.';
+            }
+        }
+
+        updateAllInfo();
+        setInterval(updateAllInfo, 60000);
+        setInterval(refreshLandscape, 5 * 60 * 1000);
+    </script>
+</body>
+</html>
