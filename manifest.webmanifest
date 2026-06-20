@@ -1,7 +1,7 @@
 {
-  "name": "Tide · OFC",
-  "short_name": "Tide · OFC",
-  "description": "Estimated tide for the Old Field Club, with water temperature and sun & moon times.",
+  "name": "Tide",
+  "short_name": "Tide",
+  "description": "Estimated tide for West Meadow Beach (Old Field Club) and Ecola State Park, with water temperature and sun & moon times. Switch locations in-app.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
