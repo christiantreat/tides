@@ -5,15 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <!-- Home-screen / installed-app branding. "Tide · OFC" leads with "Tide" so it
+    <!-- Home-screen / installed-app branding. "Tide" leads the name so it
          surfaces when searching the phone. apple-mobile-web-app-title sets the iOS
-         home-screen label; the manifest sets it on Android/Chrome. -->
-    <meta name="apple-mobile-web-app-title" content="Tide · OFC">
+         home-screen label; the manifest sets it on Android/Chrome. The app shows
+         several locations and the in-app title updates as you switch between them. -->
+    <meta name="apple-mobile-web-app-title" content="Tide">
     <meta name="theme-color" content="#05204A">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
-    <title>Tide · OFC</title>
+    <title>Tide</title>
     <style>
         body {
             font-family: Courier, monospace;
@@ -27,6 +28,7 @@
             color: #05204A;
         }
         .app-container {
+            position: relative;
             background-color: #05204A;
             color: #E8EEF2;
             border-radius: 40px;
@@ -42,7 +44,22 @@
             overflow: hidden;
         }
         .header-line { flex: none; display: flex; align-items: baseline; justify-content: flex-start; gap: 10px; margin-top: env(safe-area-inset-top); }
-        .location { font-size: 20px; font-weight: bold; letter-spacing: 1px; }
+        /* The location name doubles as the switcher button (tap to choose a place). */
+        .location {
+            font-family: inherit;
+            font-size: 20px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            color: inherit;
+            background: none;
+            border: none;
+            padding: 0;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: baseline;
+            gap: 6px;
+        }
+        .location .caret { font-size: 13px; opacity: 0.7; }
         .current-date { font-size: 11px; white-space: nowrap; }
         .note { font-size: 11px; opacity: 0.65; }
         .scene { width: 100%; margin-bottom: 16px; line-height: 0; }
@@ -82,6 +99,57 @@
         .pill.down1 { background: #7FA8D8; color: #07182E; }
         .pill.down2 { background: #5C8FD6; color: #04122A; }
         #loading, #error { text-align: center; font-size: 18px; }
+        /* Location switcher menu: drops down under the header, listing each place.
+           Tap a name to view it now; tap its star to make it the default the app
+           opens to next time. Sits above the scene with a high z-index. */
+        .loc-menu {
+            position: absolute;
+            top: calc(env(safe-area-inset-top) + 36px);
+            left: 20px;
+            right: 20px;
+            background: #0c2c5c;
+            border: 1px solid rgba(232, 238, 242, 0.25);
+            border-radius: 14px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+            padding: 6px;
+            z-index: 20;
+        }
+        .loc-menu[hidden] { display: none; }
+        .loc-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 9px 12px;
+            border-radius: 10px;
+        }
+        .loc-row + .loc-row { margin-top: 2px; }
+        .loc-row.active { background: rgba(232, 238, 242, 0.10); }
+        .loc-pick {
+            flex: 1 1 auto;
+            text-align: left;
+            background: none;
+            border: none;
+            color: #E8EEF2;
+            font-family: inherit;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            padding: 0;
+        }
+        .loc-pick .sub { display: block; font-weight: normal; font-size: 11px; opacity: 0.6; letter-spacing: 0; margin-top: 2px; }
+        .loc-star {
+            flex: none;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+            color: #F2C96E;
+            padding: 4px 6px;
+        }
+        .loc-star[aria-pressed="false"] { color: rgba(232, 238, 242, 0.4); }
+        .loc-menu .menu-hint { font-size: 10px; opacity: 0.55; padding: 6px 12px 4px; }
         /* In landscape the phone turns into a weather-station display: the
            portrait app is hidden and a full-screen flex row takes over — the live
            NWS radar on the left, and a slowly scrolling local text forecast on the
@@ -143,23 +211,28 @@
 <body>
     <div class="app-container">
         <div class="header-line">
-            <span class="location">Old Field Club</span>
+            <button class="location" id="locationButton" aria-haspopup="true" aria-expanded="false">
+                <span id="locationName">&nbsp;</span><span class="caret" aria-hidden="true">&#9662;</span>
+            </button>
         </div>
+        <!-- Location switcher (populated by JS); hidden until the header is tapped. -->
+        <div class="loc-menu" id="locMenu" hidden></div>
         <div id="loading">Loading data...</div>
         <div id="error" style="display: none;"></div>
         <div id="todayInfo" class="data-section" style="display: none;">
             <div class="data-box"></div>
         </div>
         <div class="app-footer">
-            <span class="footer-source">Estimated tide &middot; Port Jefferson + Northport</span>
+            <span class="footer-source" id="footerSource"></span>
             <span class="current-date" id="currentDate"></span>
         </div>
     </div>
-    <!-- Landscape weather-station view (see CSS): live local NWS radar (KOKX,
-         Upton NY) on the left + a slowly scrolling NWS text forecast on the right.
-         Both load lazily the first time the phone enters landscape. -->
+    <!-- Landscape weather-station view (see CSS): the active location's live local
+         NWS radar on the left + a slowly scrolling NWS text forecast on the right.
+         Both load lazily the first time the phone enters landscape, and reload when
+         the location changes. -->
     <div class="landscape-view" id="landscapeView">
-        <img class="landscape-radar" id="radarFrame" alt="Local NWS radar (KOKX)"
+        <img class="landscape-radar" id="radarFrame" alt="Local NWS radar"
              referrerpolicy="no-referrer">
         <aside class="landscape-forecast" aria-label="Local text forecast">
             <div class="forecast-head">Local Forecast</div>
@@ -170,80 +243,131 @@
     </div>
 
     <script>
-        // Port Jefferson is in the US Eastern time zone. Anchoring everything to
-        // this zone keeps the app accurate regardless of where it is viewed and
-        // automatically follows the EST/EDT daylight-savings switch.
-        const TIME_ZONE = 'America/New_York';
+        // --- Locations -------------------------------------------------------
+        // Every place the app can show is described once here, and the whole UI is
+        // driven off the currently-selected entry (`loc`). NOAA has no tide station
+        // at either spot, so each location's tide is estimated by interpolating
+        // between two reference stations that bracket it along `axis` ('lat' or
+        // 'lon') — see estimateTides / locWeight. All timing is anchored to the
+        // location's own time zone so it stays correct no matter where it is viewed,
+        // and the daylight-savings switch is handled automatically.
+        const LOCATIONS = [
+            {
+                id: 'ofc',
+                label: 'West Meadow Beach',
+                title: 'OFC',
+                timeZone: 'America/New_York',
+                // Old Field Club, 86 West Meadow Road, on Smithtown Bay. The shore
+                // here runs east–west, so we bracket by longitude: Port Jefferson to
+                // the east and Northport Bay to the west.
+                target: { name: 'Old Field Club', lat: 40.943, lon: -73.146 },
+                axis: 'lon',
+                anchorA: { id: '8514560', name: 'Port Jefferson', lon: -73.0767 },
+                anchorB: { id: '8515586', name: 'Northport', lon: -73.3533 },
+                // No water-temp sensor at the target; nearest is Bridgeport, CT.
+                tempStation: { id: '8467150', name: 'Bridgeport, CT' },
+                footerSource: 'Estimated tide · Port Jefferson + Northport',
+                // KOKX is the NWS Upton, NY radar; OKX grid 61,57 the forecast cell.
+                radarSite: 'KOKX',
+                radarUrl: 'https://radar.weather.gov/ridge/standard/KOKX_loop.gif',
+                forecastUrl: 'https://api.weather.gov/gridpoints/OKX/61,57/forecast'
+            },
+            {
+                id: 'ecola',
+                label: 'Ecola State Park',
+                title: 'Ecola',
+                timeZone: 'America/Los_Angeles',
+                // Indian Beach, Ecola State Park, just north of Cannon Beach. This
+                // coastline runs north–south, so we bracket by latitude: Tillamook
+                // Bay North Jetty to the south and Cape Disappointment to the north.
+                target: { name: 'Indian Beach', lat: 45.9293, lon: -123.9756 },
+                axis: 'lat',
+                anchorA: { id: '9437585', name: 'Tillamook Bay N. Jetty', lat: 45.57 },
+                anchorB: { id: '9440581', name: 'Cape Disappointment', lat: 46.281 },
+                // Nearest open-coast water-temp sensor is South Beach (Newport), OR.
+                tempStation: { id: '9435380', name: 'South Beach, Newport OR' },
+                footerSource: 'Estimated tide · Tillamook N. Jetty + Cape Disappointment',
+                // KRTX is the NWS Portland, OR radar; PQR grid 75,131 the forecast cell.
+                radarSite: 'KRTX',
+                radarUrl: 'https://radar.weather.gov/ridge/standard/KRTX_loop.gif',
+                forecastUrl: 'https://api.weather.gov/gridpoints/PQR/75,131/forecast'
+            }
+        ];
 
-        // NOAA has no tide station at the Old Field Club (86 West Meadow Road, on
-        // Smithtown Bay). We estimate its tide by linearly interpolating between the
-        // two nearest reference stations that bracket it along the shore — Port
-        // Jefferson to the east and Northport Bay to the west — by longitude. This
-        // is a first-order estimate (the same idea NOAA's subordinate-station time/
-        // height offsets encode), not an official prediction, hence "Estimated".
-        const TARGET = { name: 'Old Field Club', lat: 40.943, lon: -73.146 };
-        const EAST = { id: '8514560', name: 'Port Jefferson', lon: -73.0767 };
-        const WEST = { id: '8515586', name: 'Northport', lon: -73.3533 };
-        const TEMP_STATION = { id: '8467150', name: 'Bridgeport, CT' };
+        // Persistence keys. DEFAULT_KEY is the place the user pinned to open by
+        // default (the star); LAST_KEY remembers the most recently viewed place so a
+        // reload returns there when no default is pinned.
+        const DEFAULT_KEY = 'tideDefaultLocation';
+        const LAST_KEY = 'tideLastLocation';
 
-        // Blend weight toward the west anchor (0 = Port Jefferson, 1 = Northport),
-        // from where the target sits between the two stations' longitudes (~0.25).
-        const W = (TARGET.lon - EAST.lon) / (WEST.lon - EAST.lon);
+        function findLocation(id) { return LOCATIONS.find(l => l.id === id) || null; }
 
-        // Eastern Time's current UTC offset in whole hours (-5 during EST, -4
-        // during EDT). Derived from the date so daylight savings is handled for us.
-        function getEasternUtcOffset(date = new Date()) {
+        // The active location. Assigned for real during init (initialLocation),
+        // after the cache helpers below are available; default here keeps the many
+        // functions that read `loc` safe if one runs before init.
+        let loc = LOCATIONS[0];
+
+        // Interpolation weight toward anchor B (0 = anchor A, 1 = anchor B), from
+        // where the target sits between the two anchors along the location's axis.
+        function locWeight(l) {
+            const a = l.anchorA[l.axis], b = l.anchorB[l.axis], t = l.target[l.axis];
+            return (t - a) / (b - a);
+        }
+
+        // The location's current UTC offset in whole hours (e.g. -5/-4 for Eastern,
+        // -8/-7 for Pacific). Derived from the date so daylight savings is handled.
+        function getZoneUtcOffset(date = new Date()) {
             const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
-            const easternDate = new Date(date.toLocaleString('en-US', { timeZone: TIME_ZONE }));
-            return Math.round((easternDate - utcDate) / (1000 * 60 * 60));
+            const zoneDate = new Date(date.toLocaleString('en-US', { timeZone: loc.timeZone }));
+            return Math.round((zoneDate - utcDate) / (1000 * 60 * 60));
         }
 
-        // Calendar date (YYYY-MM-DD) as it is in Eastern Time, not UTC. Using UTC
-        // here would roll over to "tomorrow" during the evening hours.
-        function getEasternDateString(date = new Date()) {
-            return date.toLocaleDateString('en-CA', { timeZone: TIME_ZONE });
+        // Calendar date (YYYY-MM-DD) as it is in the location's time zone, not UTC.
+        // Using UTC here would roll over to "tomorrow" during the evening hours.
+        function getZoneDateString(date = new Date()) {
+            return date.toLocaleDateString('en-CA', { timeZone: loc.timeZone });
         }
 
-        // NOAA returns tide times as Eastern wall-clock strings ("YYYY-MM-DD HH:MM")
-        // with no zone marker. Attach the correct Eastern offset so they parse to the
-        // right instant even when the viewing device is in another time zone.
-        function parseEasternDateTime(dateTimeString) {
+        // NOAA returns tide times as local wall-clock strings ("YYYY-MM-DD HH:MM")
+        // with no zone marker. Attach the correct offset so they parse to the right
+        // instant even when the viewing device is in another time zone.
+        function parseZoneDateTime(dateTimeString) {
             const [datePart, timePart] = dateTimeString.trim().split(/[ T]/);
-            const offset = getEasternUtcOffset(new Date(`${datePart}T12:00:00Z`));
+            const offset = getZoneUtcOffset(new Date(`${datePart}T12:00:00Z`));
             const sign = offset >= 0 ? '+' : '-';
             const pad = String(Math.abs(offset)).padStart(2, '0');
             return new Date(`${datePart}T${timePart}:00${sign}${pad}:00`);
         }
 
         function getTodayDate() {
-            return getEasternDateString();
+            return getZoneDateString();
         }
 
         function getTomorrowDate() {
-            return getEasternDateString(new Date(Date.now() + 24 * 60 * 60 * 1000));
+            return getZoneDateString(new Date(Date.now() + 24 * 60 * 60 * 1000));
         }
 
         function getSunMoonApiUrl(dateStr) {
-            const tz = getEasternUtcOffset();
-            return `https://aa.usno.navy.mil/api/rstt/oneday?date=${dateStr}&coords=${TARGET.lat},${TARGET.lon}&tz=${tz}&dst=false`;
+            const tz = getZoneUtcOffset();
+            return `https://aa.usno.navy.mil/api/rstt/oneday?date=${dateStr}&coords=${loc.target.lat},${loc.target.lon}&tz=${tz}&dst=false`;
         }
 
-        // Eastern calendar date (YYYY-MM-DD) offset by N days from today.
-        function easternDateOffset(days) {
-            return getEasternDateString(new Date(Date.now() + days * 24 * 60 * 60 * 1000));
+        // Location-zone calendar date (YYYY-MM-DD) offset by N days from today.
+        function zoneDateOffset(days) {
+            return getZoneDateString(new Date(Date.now() + days * 24 * 60 * 60 * 1000));
         }
 
         function getTideApiUrl(stationId) {
             // Yesterday → tomorrow, so the now-centered ±12h tide curve always has
             // bracketing events even in the early morning or late evening.
-            const beginDate = easternDateOffset(-1).replace(/-/g, '');
+            const beginDate = zoneDateOffset(-1).replace(/-/g, '');
             const endDate = getTomorrowDate().replace(/-/g, '');
             return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=${stationId}&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
         }
 
         // Latest water-temperature observation. There is no sensor at the target;
-        // the nearest reporting station is Bridgeport, CT across the Sound, so the
-        // reading is labeled with its source rather than presented as local.
+        // the reading is labeled with its source station rather than presented as
+        // local (see tempStation in the location config).
         function getWaterTempUrl(stationId) {
             return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=water_temperature&application=NOS.COOPS.TAC.WL&date=latest&station=${stationId}&time_zone=lst_ldt&units=english&format=json`;
         }
@@ -257,7 +381,7 @@
         // A full year of high/low predictions, ending today, for the 12-month
         // percentile. Same URL shape as getTideApiUrl, just a wider date range.
         function getTideStatsApiUrl(stationId) {
-            const beginDate = getEasternDateString(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)).replace(/-/g, '');
+            const beginDate = getZoneDateString(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)).replace(/-/g, '');
             const endDate = getTodayDate().replace(/-/g, '');
             return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=${stationId}&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
         }
@@ -275,6 +399,10 @@
         function cacheSet(key, value) {
             memoryCache[key] = value;
             try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* ignore */ }
+        }
+        function cacheRemove(key) {
+            delete memoryCache[key];
+            try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
         }
 
         // NOAA's published tidal datums (long-term averages and astronomical
@@ -357,57 +485,57 @@
             return baseline;
         }
 
-        // Eastern wall-clock stamp ("YYYY-MM-DD HH:MM") for a Date, matching the
-        // format NOAA returns so the interpolated events flow through the same
-        // parseEasternDateTime / formatTideTime / day-extreme code as raw ones.
-        function toEasternStamp(date) {
-            const d = date.toLocaleDateString('en-CA', { timeZone: TIME_ZONE });
-            const t = date.toLocaleTimeString('en-GB', { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false });
+        // Location-zone wall-clock stamp ("YYYY-MM-DD HH:MM") for a Date, matching
+        // the format NOAA returns so the interpolated events flow through the same
+        // parseZoneDateTime / formatTideTime / day-extreme code as raw ones.
+        function toZoneStamp(date) {
+            const d = date.toLocaleDateString('en-CA', { timeZone: loc.timeZone });
+            const t = date.toLocaleTimeString('en-GB', { timeZone: loc.timeZone, hour: '2-digit', minute: '2-digit', hour12: false });
             return `${d} ${t}`;
         }
 
         // Estimate the target's high/low tides by interpolating between the two
-        // anchor stations. Each east (Port Jefferson) event is matched to the
-        // nearest same-type west (Northport) event within 3h, then both its time and
-        // height are blended by weight w (0 = east, 1 = west). An east event with no
-        // nearby west match is dropped rather than reported unblended.
-        function estimateTides(eastPreds, westPreds, w) {
-            const west = (westPreds || []).map(p => ({
-                type: p.type, ms: parseEasternDateTime(p.t).getTime(), v: parseFloat(p.v)
+        // anchor stations. Each anchor-A event is matched to the nearest same-type
+        // anchor-B event within 3h, then both its time and height are blended by
+        // weight w (0 = anchor A, 1 = anchor B). An anchor-A event with no nearby
+        // anchor-B match is dropped rather than reported unblended.
+        function estimateTides(aPreds, bPreds, w) {
+            const b = (bPreds || []).map(p => ({
+                type: p.type, ms: parseZoneDateTime(p.t).getTime(), v: parseFloat(p.v)
             }));
             const out = [];
-            (eastPreds || []).forEach(pe => {
-                const me = parseEasternDateTime(pe.t).getTime();
-                const ve = parseFloat(pe.v);
-                if (!isFinite(me) || !isFinite(ve)) return;
+            (aPreds || []).forEach(pa => {
+                const ma = parseZoneDateTime(pa.t).getTime();
+                const va = parseFloat(pa.v);
+                if (!isFinite(ma) || !isFinite(va)) return;
                 let best = null, bestDiff = Infinity;
-                west.forEach(pw => {
-                    if (pw.type !== pe.type) return;
-                    const diff = Math.abs(pw.ms - me);
-                    if (diff < bestDiff) { bestDiff = diff; best = pw; }
+                b.forEach(pb => {
+                    if (pb.type !== pa.type) return;
+                    const diff = Math.abs(pb.ms - ma);
+                    if (diff < bestDiff) { bestDiff = diff; best = pb; }
                 });
                 if (!best || bestDiff > 3 * 60 * 60 * 1000) return;
-                const ms = me + w * (best.ms - me);
-                const v = ve + w * (best.v - ve);
-                out.push({ t: toEasternStamp(new Date(ms)), v: v.toFixed(3), type: pe.type });
+                const ms = ma + w * (best.ms - ma);
+                const v = va + w * (best.v - va);
+                out.push({ t: toZoneStamp(new Date(ms)), v: v.toFixed(3), type: pa.type });
             });
-            out.sort((a, b) => parseEasternDateTime(a.t) - parseEasternDateTime(b.t));
+            out.sort((x, y) => parseZoneDateTime(x.t) - parseZoneDateTime(y.t));
             return { predictions: out };
         }
 
         // Blend two stations' datums for the target point. If only one side is
         // available it is used as-is; if neither is, returns null (the verdict then
         // falls back to percentile-only, which classifyTide already handles).
-        function interpDatums(dE, dW, w) {
-            if (!dE && !dW) return null;
-            if (!dE) return dW;
-            if (!dW) return dE;
+        function interpDatums(dA, dB, w) {
+            if (!dA && !dB) return null;
+            if (!dA) return dB;
+            if (!dB) return dA;
             const blend = (a, b) => (isFinite(a) && isFinite(b)) ? a + w * (b - a) : (isFinite(a) ? a : b);
             return {
-                avgHigh: blend(dE.avgHigh, dW.avgHigh),
-                avgLow: blend(dE.avgLow, dW.avgLow),
-                ceiling: blend(dE.ceiling, dW.ceiling),
-                floor: blend(dE.floor, dW.floor)
+                avgHigh: blend(dA.avgHigh, dB.avgHigh),
+                avgLow: blend(dA.avgLow, dB.avgLow),
+                ceiling: blend(dA.ceiling, dB.ceiling),
+                floor: blend(dA.floor, dB.floor)
             };
         }
 
@@ -426,9 +554,9 @@
             return m ? parseInt(m[1], 10) + parseInt(m[2], 10) / 60 : null;
         }
 
-        // Current Eastern time as fractional hours in [0,24).
-        function easternNowHours() {
-            const s = new Date().toLocaleTimeString('en-GB', { timeZone: TIME_ZONE, hour12: false, hour: '2-digit', minute: '2-digit' });
+        // Current location-zone time as fractional hours in [0,24).
+        function zoneNowHours() {
+            const s = new Date().toLocaleTimeString('en-GB', { timeZone: loc.timeZone, hour12: false, hour: '2-digit', minute: '2-digit' });
             return parseHM(s) || 0;
         }
 
@@ -527,7 +655,7 @@
         // day events sit on a bottom axis. `celestial` from buildCelestial; `preds`
         // are estimated tide hi/los; `phase` from parsePhase; `tempF` a number/null.
         function buildSceneSvg(celestial, preds, phase, tempF) {
-            const nowH = easternNowHours();
+            const nowH = zoneNowHours();
             const Twin = 24, winStart = nowH - Twin / 2, winEnd = nowH + Twin / 2;
             const W = 320, padX = 6, H = 196, sceneBottom = 158, arcBaseline = 138, arcTop = 14, seaTop = 72;
             const xOf = t => padX + ((t - winStart) / Twin) * (W - 2 * padX);
@@ -554,8 +682,8 @@
             celestial.sunArcs.forEach(({ rise, noon, set }) => { const pts = hump(rise, set, noon); if (pts.length > 1) svg += `<polyline points="${poly(pts)}" fill="none" stroke="#F2C96E" stroke-width="2.5" stroke-linecap="round"/>`; });
 
             // Tide as a translucent water level over the lower sky.
-            const todayMid = parseEasternDateTime(getTodayDate() + ' 00:00').getTime();
-            const tev = (preds || []).map(p => ({ h: (parseEasternDateTime(p.t).getTime() - todayMid) / 3600000, v: parseFloat(p.v) }))
+            const todayMid = parseZoneDateTime(getTodayDate() + ' 00:00').getTime();
+            const tev = (preds || []).map(p => ({ h: (parseZoneDateTime(p.t).getTime() - todayMid) / 3600000, v: parseFloat(p.v) }))
                 .filter(e => isFinite(e.h) && isFinite(e.v)).sort((a, b) => a.h - b.h);
             let tideAtNow = null;
             if (tev.length >= 2) {
@@ -616,35 +744,117 @@
         }
 
         function updateCurrentDate() {
-            document.getElementById('currentDate').textContent = new Date().toLocaleDateString(undefined, { timeZone: TIME_ZONE, weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+            document.getElementById('currentDate').textContent = new Date().toLocaleDateString(undefined, { timeZone: loc.timeZone, weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+        }
+
+        // --- Location switcher -----------------------------------------------
+        // The header location name opens a small menu of every place. Tapping a
+        // name views it immediately; tapping its star pins it as the default the app
+        // opens to next time. The current selection is always remembered (LAST_KEY)
+        // so a reload returns to it even when nothing is pinned.
+
+        // The place to open on load: pinned default, else last viewed, else first.
+        function initialLocation() {
+            return findLocation(cacheGet(DEFAULT_KEY)) || findLocation(cacheGet(LAST_KEY)) || LOCATIONS[0];
+        }
+
+        // Reflect the active location in the header, footer and tab title.
+        function renderLocationChrome() {
+            document.getElementById('locationName').textContent = loc.label;
+            document.getElementById('footerSource').textContent = loc.footerSource;
+            document.title = 'Tide · ' + loc.title;
+        }
+
+        // (Re)build the dropdown rows from the location list + the saved default.
+        function buildLocationMenu() {
+            const menu = document.getElementById('locMenu');
+            const defId = cacheGet(DEFAULT_KEY);
+            menu.innerHTML = LOCATIONS.map(l => {
+                const isActive = l.id === loc.id;
+                const isDefault = l.id === defId;
+                return `<div class="loc-row${isActive ? ' active' : ''}">
+                    <button class="loc-pick" type="button" data-loc="${l.id}">${l.label}<span class="sub">${l.target.name}</span></button>
+                    <button class="loc-star" type="button" data-default="${l.id}" aria-pressed="${isDefault}" aria-label="Open ${l.label} by default" title="Open by default">${isDefault ? '★' : '☆'}</button>
+                </div>`;
+            }).join('') + `<div class="menu-hint">★ opens by default</div>`;
+        }
+
+        function setMenuOpen(open) {
+            const menu = document.getElementById('locMenu');
+            const btn = document.getElementById('locationButton');
+            const show = (open === undefined) ? menu.hidden : open;
+            menu.hidden = !show;
+            btn.setAttribute('aria-expanded', show ? 'true' : 'false');
+        }
+
+        // Switch the active location, remember it, and reload everything for it.
+        function switchLocation(id) {
+            const next = findLocation(id);
+            if (!next || next.id === loc.id) return;
+            loc = next;
+            cacheSet(LAST_KEY, id);
+            renderLocationChrome();
+            buildLocationMenu();
+            // Force the landscape radar + forecast to refetch for the new place.
+            forecastFetchedAt = 0;
+            const fs = document.getElementById('forecastScroll');
+            if (fs) fs.innerHTML = '';
+            // Show the loader again while the new location's data comes in.
+            document.getElementById('todayInfo').style.display = 'none';
+            document.getElementById('loading').style.display = 'block';
+            updateAllInfo();
+            refreshLandscape();
+        }
+
+        function setupLocationMenu() {
+            const btn = document.getElementById('locationButton');
+            const menu = document.getElementById('locMenu');
+            btn.addEventListener('click', (e) => { e.stopPropagation(); setMenuOpen(); });
+            menu.addEventListener('click', (e) => {
+                e.stopPropagation();   // keep the document handler from closing us first
+                const pick = e.target.closest('.loc-pick');
+                const star = e.target.closest('.loc-star');
+                if (pick) {
+                    switchLocation(pick.dataset.loc);
+                    setMenuOpen(false);
+                } else if (star) {
+                    const id = star.dataset.default;
+                    // Tapping the current default un-pins it (falls back to last viewed).
+                    if (cacheGet(DEFAULT_KEY) === id) cacheRemove(DEFAULT_KEY);
+                    else cacheSet(DEFAULT_KEY, id);
+                    buildLocationMenu();
+                }
+            });
+            // Any tap outside the menu closes it.
+            document.addEventListener('click', () => setMenuOpen(false));
         }
 
         // The landscape radar + forecast load lazily and stay fresh: nothing is
         // fetched while the phone is in portrait. The radar's cache-busting
-        // timestamp pulls the newest scan on each refresh. KOKX is the NWS Upton,
-        // NY site (radar), OKX grid 61,57 the NWS forecast cell, both centered on
-        // the target area.
-        const RADAR_URL = 'https://radar.weather.gov/ridge/standard/KOKX_loop.gif';
-        const FORECAST_URL = 'https://api.weather.gov/gridpoints/OKX/61,57/forecast';
+        // timestamp pulls the newest scan on each refresh. The radar site + forecast
+        // grid come from the active location.
         const landscapeMediaQuery = window.matchMedia('(orientation: landscape)');
 
         function refreshRadar() {
             if (!landscapeMediaQuery.matches) return;   // never fetch in portrait
-            document.getElementById('radarFrame').src = RADAR_URL + '?t=' + Date.now();
+            const frame = document.getElementById('radarFrame');
+            frame.alt = 'Local NWS radar (' + loc.radarSite + ')';
+            frame.src = loc.radarUrl + '?t=' + Date.now();
         }
 
-        // Fetches the NWS local forecast and feeds the scrolling panel. The track
-        // holds two copies of the forecast so the CSS translateY(-50%) loop is
-        // seamless; the animation duration is derived from the measured height to
-        // keep a constant, very slow scroll. Refetched at most every 30 min (the
-        // forecast changes slowly); failures leave the previous forecast in place.
+        // Fetches the active location's NWS local forecast and feeds the scrolling
+        // panel. The track holds two copies of the forecast so the CSS translateY
+        // loop is seamless; the animation duration is derived from the measured
+        // height to keep a constant, very slow scroll. Refetched at most every 30
+        // min (the forecast changes slowly); failures leave the previous one in
+        // place. Switching location resets the timer so it refetches immediately.
         let forecastFetchedAt = 0;
         async function refreshForecast() {
             if (!landscapeMediaQuery.matches) return;
             const scroll = document.getElementById('forecastScroll');
             if (scroll.children.length && Date.now() - forecastFetchedAt < 30 * 60 * 1000) return;
             try {
-                const data = await fetchData(FORECAST_URL);
+                const data = await fetchData(loc.forecastUrl);
                 const periods = (data.properties && data.properties.periods) || [];
                 if (!periods.length) return;
                 const html = periods.map(p =>
@@ -687,12 +897,12 @@
         })();
 
         function formatTideTime(dateTimeString) {
-            return parseEasternDateTime(dateTimeString).toLocaleTimeString([], { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false });
+            return parseZoneDateTime(dateTimeString).toLocaleTimeString([], { timeZone: loc.timeZone, hour: '2-digit', minute: '2-digit', hour12: false });
         }
 
         function getTimeUntilNextTide(nextTide) {
             const now = new Date();
-            const tideTime = parseEasternDateTime(nextTide.t);
+            const tideTime = parseZoneDateTime(nextTide.t);
             const timeDiff = tideTime - now;
             const hours = Math.floor(timeDiff / (1000 * 60 * 60));
             const minutes = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
@@ -732,7 +942,7 @@
                 if (p.type === 'H') { if (!e.high || v > parseFloat(e.high.v)) e.high = p; }
                 else if (p.type === 'L') { if (!e.low || v < parseFloat(e.low.v)) e.low = p; }
             });
-            const futureTides = preds.filter(pred => parseEasternDateTime(pred.t) > now);
+            const futureTides = preds.filter(pred => parseZoneDateTime(pred.t) > now);
             let tideRows = '';
             if (futureTides.length) {
                 const nextTide = futureTides[0];
@@ -761,7 +971,7 @@
             const row = (label, value) => `<div class="data-item"><span class="data-label">${label}:</span><span>${value || '—'}</span></div>`;
             const sunRows = sunOrder.map(p => row(sunLabels[p] || p, sunBy[p])).join('');
             const moonRows = moonOrder.map(p => row(moonLabels[p], moonBy[p])).join('');
-            const tempNote = (tempF != null && isFinite(tempF)) ? `<div class="data-item note"><span>water source: ${TEMP_STATION.name}</span></div>` : '';
+            const tempNote = (tempF != null && isFinite(tempF)) ? `<div class="data-item note"><span>water source: ${loc.tempStation.name}</span></div>` : '';
 
             box.innerHTML = `
                 ${sceneHTML}
@@ -780,25 +990,32 @@
         async function updateAllInfo() {
             const loadingElement = document.getElementById('loading');
             const errorElement = document.getElementById('error');
+            // Capture which location this run is for, so a fast switch mid-fetch
+            // doesn't render stale data over the newer selection.
+            const runLoc = loc;
 
             try {
                 loadingElement.style.display = 'block';
                 errorElement.style.display = 'none';
 
-                const [smYest, smToday, smTomorrow, eastTide, westTide, tempData, pjBaseline, npDatums] = await Promise.all([
-                    fetchData(getSunMoonApiUrl(easternDateOffset(-1))).then(d => d.properties.data).catch(() => null),
+                const w = locWeight(runLoc);
+                const [smYest, smToday, smTomorrow, aTide, bTide, tempData, aBaseline, bDatums] = await Promise.all([
+                    fetchData(getSunMoonApiUrl(zoneDateOffset(-1))).then(d => d.properties.data).catch(() => null),
                     fetchData(getSunMoonApiUrl(getTodayDate())).then(d => d.properties.data),
-                    fetchData(getSunMoonApiUrl(easternDateOffset(1))).then(d => d.properties.data).catch(() => null),
-                    fetchData(getTideApiUrl(EAST.id)),
-                    fetchData(getTideApiUrl(WEST.id)),
-                    fetchData(getWaterTempUrl(TEMP_STATION.id)).catch(() => null),
-                    getTideBaseline(EAST.id).catch(() => null),
-                    getStationDatums(WEST.id).catch(() => null)
+                    fetchData(getSunMoonApiUrl(zoneDateOffset(1))).then(d => d.properties.data).catch(() => null),
+                    fetchData(getTideApiUrl(runLoc.anchorA.id)),
+                    fetchData(getTideApiUrl(runLoc.anchorB.id)),
+                    fetchData(getWaterTempUrl(runLoc.tempStation.id)).catch(() => null),
+                    getTideBaseline(runLoc.anchorA.id).catch(() => null),
+                    getStationDatums(runLoc.anchorB.id).catch(() => null)
                 ]);
 
-                const estimated = estimateTides(eastTide.predictions, westTide.predictions, W);
-                const baseline = pjBaseline
-                    ? { highs: pjBaseline.highs, lows: pjBaseline.lows, datums: interpDatums(pjBaseline.datums, npDatums, W) }
+                // A newer selection won the race; let that run own the display.
+                if (runLoc.id !== loc.id) return;
+
+                const estimated = estimateTides(aTide.predictions, bTide.predictions, w);
+                const baseline = aBaseline
+                    ? { highs: aBaseline.highs, lows: aBaseline.lows, datums: interpDatums(aBaseline.datums, bDatums, w) }
                     : null;
                 const celestial = buildCelestial([{ off: -1, data: smYest }, { off: 0, data: smToday }, { off: 1, data: smTomorrow }]);
 
@@ -808,12 +1025,18 @@
 
                 loadingElement.style.display = 'none';
             } catch (error) {
+                if (runLoc.id !== loc.id) return;   // a newer selection is loading
                 loadingElement.style.display = 'none';
                 errorElement.style.display = 'block';
                 errorElement.textContent = 'Failed to load data. Please try again later.';
             }
         }
 
+        // --- Boot ------------------------------------------------------------
+        loc = initialLocation();
+        renderLocationChrome();
+        buildLocationMenu();
+        setupLocationMenu();
         updateAllInfo();
         setInterval(updateAllInfo, 60000);
         setInterval(refreshLandscape, 5 * 60 * 1000);
