@@ -60,6 +60,46 @@
             gap: 6px;
         }
         .location .caret { font-size: 13px; opacity: 0.7; }
+        /* Day look-ahead navigator: ‹ today/date › — swipe the card or tap the
+           arrows to move up to a month ahead; tap the label to jump back to today. */
+        .day-nav {
+            flex: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            margin-top: 8px;
+        }
+        .day-arrow {
+            background: none;
+            border: 1px solid rgba(232, 238, 242, 0.3);
+            color: #E8EEF2;
+            border-radius: 50%;
+            width: 28px;
+            height: 28px;
+            font-size: 16px;
+            line-height: 1;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            flex: none;
+        }
+        .day-arrow:disabled { opacity: 0.25; cursor: default; }
+        .day-label {
+            background: none;
+            border: none;
+            color: #E8EEF2;
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            cursor: pointer;
+            min-width: 140px;
+            text-align: center;
+        }
+        .data-item.past { opacity: 0.5; }
         .current-date { font-size: 11px; white-space: nowrap; }
         .note { font-size: 11px; opacity: 0.65; }
         .scene { width: 100%; margin-bottom: 16px; line-height: 0; }
@@ -217,6 +257,11 @@
         </div>
         <!-- Location switcher (populated by JS); hidden until the header is tapped. -->
         <div class="loc-menu" id="locMenu" hidden></div>
+        <div class="day-nav" id="dayNav">
+            <button class="day-arrow" id="dayPrev" type="button" aria-label="Previous day">&#8249;</button>
+            <button class="day-label" id="dayLabel" type="button" aria-label="Jump to today">Today</button>
+            <button class="day-arrow" id="dayNext" type="button" aria-label="Next day">&#8250;</button>
+        </div>
         <div id="loading">Loading data...</div>
         <div id="error" style="display: none;"></div>
         <div id="todayInfo" class="data-section" style="display: none;">
@@ -300,6 +345,11 @@
         const DEFAULT_KEY = 'tideDefaultLocation';
         const LAST_KEY = 'tideLastLocation';
 
+        // Day look-ahead: how far ahead you can swipe (today = 0 .. one month).
+        const MAX_DAY_AHEAD = 31;
+        // Which day is on screen: 0 = today, up to MAX_DAY_AHEAD days ahead.
+        let dayOffset = 0;
+
         function findLocation(id) { return LOCATIONS.find(l => l.id === id) || null; }
 
         // The active location. Assigned for real during init (initialLocation),
@@ -343,10 +393,6 @@
             return getZoneDateString();
         }
 
-        function getTomorrowDate() {
-            return getZoneDateString(new Date(Date.now() + 24 * 60 * 60 * 1000));
-        }
-
         function getSunMoonApiUrl(dateStr) {
             const tz = getZoneUtcOffset();
             return `https://aa.usno.navy.mil/api/rstt/oneday?date=${dateStr}&coords=${loc.target.lat},${loc.target.lon}&tz=${tz}&dst=false`;
@@ -358,10 +404,11 @@
         }
 
         function getTideApiUrl(stationId) {
-            // Yesterday → tomorrow, so the now-centered ±12h tide curve always has
-            // bracketing events even in the early morning or late evening.
+            // Yesterday → one month ahead. The extra back-day keeps the now-centered
+            // ±12h curve bracketed in the early morning / late evening; the month of
+            // look-ahead feeds the swipe-by-day view from a single request.
             const beginDate = zoneDateOffset(-1).replace(/-/g, '');
-            const endDate = getTomorrowDate().replace(/-/g, '');
+            const endDate = zoneDateOffset(MAX_DAY_AHEAD).replace(/-/g, '');
             return `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=NOS.COOPS.TAC.WL&begin_date=${beginDate}&end_date=${endDate}&datum=MLLW&station=${stationId}&time_zone=lst_ldt&units=english&interval=hilo&format=json`;
         }
 
@@ -403,6 +450,19 @@
         function cacheRemove(key) {
             delete memoryCache[key];
             try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+        }
+
+        // Sun/moon data for one calendar date at the active location. These values
+        // are deterministic, so they're cached indefinitely (per location + date) —
+        // this keeps the day look-ahead snappy and bounds USNO calls when swiping
+        // across the month. Throws on failure (callers degrade to null).
+        async function getSunMoon(dateStr) {
+            const key = `sunMoon:${loc.id}:${dateStr}`;
+            const cached = cacheGet(key);
+            if (cached) return cached;
+            const data = await fetchData(getSunMoonApiUrl(dateStr)).then(d => d.properties.data);
+            cacheSet(key, data);
+            return data;
         }
 
         // NOAA's published tidal datums (long-term averages and astronomical
@@ -654,8 +714,13 @@
         // The tide is a translucent water level rising over the lower sky; the sun's
         // day events sit on a bottom axis. `celestial` from buildCelestial; `preds`
         // are estimated tide hi/los; `phase` from parsePhase; `tempF` a number/null.
-        function buildSceneSvg(celestial, preds, phase, tempF) {
-            const nowH = zoneNowHours();
+        // `opts.centerH` is the hour (from today's midnight) the 24h window centers
+        // on, and `opts.showNow` whether to draw the live "now" marker + current
+        // sun/moon/tide dots. Today centers on now; a look-ahead day centers on that
+        // day's local noon with no "now" marker.
+        function buildSceneSvg(celestial, preds, phase, tempF, opts = {}) {
+            const showNow = opts.showNow !== false;
+            const nowH = (opts.centerH != null) ? opts.centerH : zoneNowHours();
             const Twin = 24, winStart = nowH - Twin / 2, winEnd = nowH + Twin / 2;
             const W = 320, padX = 6, H = 196, sceneBottom = 158, arcBaseline = 138, arcTop = 14, seaTop = 72;
             const xOf = t => padX + ((t - winStart) / Twin) * (W - 2 * padX);
@@ -699,15 +764,18 @@
             }
             if (tempF != null && isFinite(tempF)) svg += `<text x="${padX + 4}" y="${sceneBottom - 6}" font-family="Courier, monospace" font-size="12" fill="#dfeaf2">Water ${Math.round(tempF)}°F</text>`;
 
-            // Fixed center = now: line + top marker + label.
-            svg += `<line x1="${cx.toFixed(1)}" y1="4" x2="${cx.toFixed(1)}" y2="${sceneBottom}" stroke="#ffffff" stroke-opacity="0.85" stroke-width="1.25"/>
-                <polygon points="${(cx - 4).toFixed(1)},2 ${(cx + 4).toFixed(1)},2 ${cx.toFixed(1)},8" fill="#ffffff"/>
-                <text x="${cx.toFixed(1)}" y="${sceneBottom - 5}" text-anchor="middle" font-family="Courier, monospace" font-size="9" fill="#ffffff">now ${fmtHour(nowH)}</text>`;
+            // Fixed center = now (today only): line + top marker + label, plus the
+            // current sun / moon / tide dots at their elevation now. Look-ahead days
+            // skip these — "now" isn't on screen — and just show the day's arcs.
+            if (showNow) {
+                svg += `<line x1="${cx.toFixed(1)}" y1="4" x2="${cx.toFixed(1)}" y2="${sceneBottom}" stroke="#ffffff" stroke-opacity="0.85" stroke-width="1.25"/>
+                    <polygon points="${(cx - 4).toFixed(1)},2 ${(cx + 4).toFixed(1)},2 ${cx.toFixed(1)},8" fill="#ffffff"/>
+                    <text x="${cx.toFixed(1)}" y="${sceneBottom - 5}" text-anchor="middle" font-family="Courier, monospace" font-size="9" fill="#ffffff">now ${fmtHour(nowH)}</text>`;
 
-            // Current sun / moon markers (on the center line, at their elevation now).
-            for (const { rise, transit, set } of celestial.moonArcs) { const e = elevInHump(rise, set, transit, nowH); if (e != null) { svg += moonGlyph(cx, ySky(e), 7, phase); break; } }
-            for (const { rise, noon, set } of celestial.sunArcs) { const e = elevInHump(rise, set, noon, nowH); if (e != null) { svg += `<circle cx="${cx.toFixed(1)}" cy="${ySky(e).toFixed(1)}" r="6" fill="#F4C95B" stroke="#E8A33D" stroke-width="1.5"/>`; break; } }
-            if (tideAtNow != null) svg += `<circle cx="${cx.toFixed(1)}" cy="${tideAtNow.toFixed(1)}" r="3" fill="#fff" stroke="#16324d"/>`;
+                for (const { rise, transit, set } of celestial.moonArcs) { const e = elevInHump(rise, set, transit, nowH); if (e != null) { svg += moonGlyph(cx, ySky(e), 7, phase); break; } }
+                for (const { rise, noon, set } of celestial.sunArcs) { const e = elevInHump(rise, set, noon, nowH); if (e != null) { svg += `<circle cx="${cx.toFixed(1)}" cy="${ySky(e).toFixed(1)}" r="6" fill="#F4C95B" stroke="#E8A33D" stroke-width="1.5"/>`; break; } }
+                if (tideAtNow != null) svg += `<circle cx="${cx.toFixed(1)}" cy="${tideAtNow.toFixed(1)}" r="3" fill="#fff" stroke="#16324d"/>`;
+            }
 
             // Bottom axis: the day's sun events within the window (two staggered rows).
             svg += `<rect x="0" y="${sceneBottom}" width="${W}" height="${H - sceneBottom}" fill="#ffffff"/>`;
@@ -743,8 +811,11 @@
             return response.json();
         }
 
+        // Footer date = the full calendar date of the day currently on screen (which
+        // is today when dayOffset is 0), in the location's time zone.
         function updateCurrentDate() {
-            document.getElementById('currentDate').textContent = new Date().toLocaleDateString(undefined, { timeZone: loc.timeZone, weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+            const d = new Date(Date.now() + dayOffset * 24 * 60 * 60 * 1000);
+            document.getElementById('currentDate').textContent = d.toLocaleDateString(undefined, { timeZone: loc.timeZone, weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
         }
 
         // --- Location switcher -----------------------------------------------
@@ -793,17 +864,14 @@
             if (!next || next.id === loc.id) return;
             loc = next;
             cacheSet(LAST_KEY, id);
+            dayOffset = 0;   // a new place always opens on today
             renderLocationChrome();
             buildLocationMenu();
             // Force the landscape radar + forecast to refetch for the new place.
             forecastFetchedAt = 0;
             const fs = document.getElementById('forecastScroll');
             if (fs) fs.innerHTML = '';
-            // Show the loader again while the new location's data comes in.
-            document.getElementById('todayInfo').style.display = 'none';
-            document.getElementById('loading').style.display = 'block';
-            updateAllInfo();
-            refreshLandscape();
+            loadAndRender();   // shows the loader, then renders today for the new place
         }
 
         function setupLocationMenu() {
@@ -909,65 +977,111 @@
             return `${hours} hours ${minutes} minutes`;
         }
 
-        // Renders the single unified "Today" card: the now-centered Sky & Sea scene
-        // plus all the textual data beneath it (moon phase + cycle %, the upcoming
-        // tide hi/los with comparator pills + countdown, and the full sun/moon time
-        // columns). `sunMoonToday` is today's USNO data; `celestial` is the
-        // multi-day model for the scene; `tempData` the latest water-temp reading.
-        function updateTodayInfo(tideData, baseline, sunMoonToday, celestial, tempData) {
-            const box = document.getElementById('todayInfo').querySelector('.data-box');
-            const now = new Date();
-            const tomorrow = getTomorrowDate();
-            const preds = tideData.predictions;
-            const phase = parsePhase(sunMoonToday.curphase, sunMoonToday.fracillum);
-            const reading = tempData && tempData.data && tempData.data[0];
-            const tempF = reading ? parseFloat(reading.v) : null;
+        // The active location's loaded data, reused across day swipes: a month of
+        // estimated tides, the comparator baseline, the latest water-temp reading,
+        // and each day's high/low extreme (for the pills). `locId` marks which
+        // location it belongs to so a stale render can be ignored after a switch.
+        let appState = { locId: null, preds: [], baseline: null, tempData: null, dayExtremes: {} };
 
-            // --- the unified scene ---
-            const sceneHTML = `<div class="scene">${buildSceneSvg(celestial, preds, phase, tempF)}</div>`;
+        // Bumped on every renderDay call so a slower async render (waiting on
+        // sun/moon) bails out when a newer swipe / switch has superseded it.
+        let renderToken = 0;
 
-            // --- moon phase caption ---
-            const phaseCap = phase ? `
-                <div class="phase-cap">
-                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">${moonGlyph(12, 12, 11, phase)}</svg>
-                    <span>${sunMoonToday.curphase} &middot; ${sunMoonToday.fracillum} lit</span>
-                </div>` : '';
+        // Fetch the active location's month of tides + comparator baseline + latest
+        // water temp, and index each day's high/low extreme. Heavy (year-of-stats +
+        // month-of-predictions), so it runs once per location and the day view
+        // reuses the result. Returns false if a newer location won the race.
+        async function loadLocationData() {
+            const runLoc = loc;
+            const w = locWeight(runLoc);
+            const [aTide, bTide, tempData, aBaseline, bDatums] = await Promise.all([
+                fetchData(getTideApiUrl(runLoc.anchorA.id)),
+                fetchData(getTideApiUrl(runLoc.anchorB.id)),
+                fetchData(getWaterTempUrl(runLoc.tempStation.id)).catch(() => null),
+                getTideBaseline(runLoc.anchorA.id).catch(() => null),
+                getStationDatums(runLoc.anchorB.id).catch(() => null)
+            ]);
+            if (runLoc.id !== loc.id) return false;   // superseded by a newer location
 
-            // --- tide: countdown + next 4 hi/lo with comparator pills + note ---
+            const estimated = estimateTides(aTide.predictions, bTide.predictions, w);
+            const baseline = aBaseline
+                ? { highs: aBaseline.highs, lows: aBaseline.lows, datums: interpDatums(aBaseline.datums, bDatums, w) }
+                : null;
             const dayExtremes = {};
-            preds.forEach(p => {
+            estimated.predictions.forEach(p => {
                 const day = p.t.trim().split(/[ T]/)[0];
                 const e = dayExtremes[day] || (dayExtremes[day] = {});
                 const v = parseFloat(p.v);
                 if (p.type === 'H') { if (!e.high || v > parseFloat(e.high.v)) e.high = p; }
                 else if (p.type === 'L') { if (!e.low || v < parseFloat(e.low.v)) e.low = p; }
             });
-            const futureTides = preds.filter(pred => parseZoneDateTime(pred.t) > now);
-            let tideRows = '';
-            if (futureTides.length) {
-                const nextTide = futureTides[0];
-                tideRows += `<div class="data-item"><span class="data-label">${nextTide.type === 'H' ? 'High' : 'Low'} tide in:</span><span>${getTimeUntilNextTide(nextTide)}</span></div>`;
-                futureTides.slice(0, 4).forEach(tide => {
-                    const day = tide.t.trim().split(/[ T]/)[0];
-                    const isTomorrow = day === tomorrow;
-                    const e = dayExtremes[day] || {};
-                    let pill = '';
-                    if (baseline) {
-                        if (tide.type === 'H' && e.high && e.high.t === tide.t) { const v = classifyTide(parseFloat(tide.v), baseline.highs, 'high', baseline.datums); pill = ` <span class="pill ${v.cls}">${v.label}</span>`; }
-                        else if (tide.type === 'L' && e.low && e.low.t === tide.t) { const v = classifyTide(parseFloat(tide.v), baseline.lows, 'low', baseline.datums); pill = ` <span class="pill ${v.cls}">${v.label}</span>`; }
-                    }
-                    tideRows += `<div class="data-item"><span class="data-label">${tide.type === 'H' ? 'High' : 'Low'}${isTomorrow ? '*' : ''}</span><span>(${parseFloat(tide.v).toFixed(2)}) ${formatTideTime(tide.t)}${pill}</span></div>`;
+            appState = { locId: runLoc.id, preds: estimated.predictions, baseline, tempData, dayExtremes };
+            return true;
+        }
+
+        // The tide rows for one calendar date: each high/low with its comparator
+        // pill, and — on today only — a countdown to the next tide plus a dimmed
+        // style on tides already past. Tides come from the loaded month (appState).
+        function buildTideRows(dateStr, isToday) {
+            const { preds, baseline, dayExtremes } = appState;
+            const now = new Date();
+            const dayPreds = preds.filter(p => p.t.trim().split(/[ T]/)[0] === dateStr);
+            const pillFor = (tide) => {
+                if (!baseline) return '';
+                const e = dayExtremes[dateStr] || {};
+                if (tide.type === 'H' && e.high && e.high.t === tide.t) { const v = classifyTide(parseFloat(tide.v), baseline.highs, 'high', baseline.datums); return ` <span class="pill ${v.cls}">${v.label}</span>`; }
+                if (tide.type === 'L' && e.low && e.low.t === tide.t) { const v = classifyTide(parseFloat(tide.v), baseline.lows, 'low', baseline.datums); return ` <span class="pill ${v.cls}">${v.label}</span>`; }
+                return '';
+            };
+            let rows = '';
+            if (isToday) {
+                const next = preds.find(p => parseZoneDateTime(p.t) > now);
+                if (next) rows += `<div class="data-item"><span class="data-label">${next.type === 'H' ? 'High' : 'Low'} tide in:</span><span>${getTimeUntilNextTide(next)}</span></div>`;
+            }
+            if (dayPreds.length) {
+                dayPreds.forEach(tide => {
+                    const past = isToday && parseZoneDateTime(tide.t) < now;
+                    rows += `<div class="data-item${past ? ' past' : ''}"><span class="data-label">${tide.type === 'H' ? 'High' : 'Low'}</span><span>(${parseFloat(tide.v).toFixed(2)}) ${formatTideTime(tide.t)}${pillFor(tide)}</span></div>`;
                 });
-                tideRows += `<div class="data-item note"><span>heights &amp; times estimated${preds.some(p => p.t.trim().split(/[ T]/)[0] === tomorrow) ? ' &middot; * = tomorrow' : ''}</span></div>`;
+                rows += `<div class="data-item note"><span>heights &amp; times estimated</span></div>`;
+            } else {
+                rows += `<div class="data-item note"><span>no tide data for this day</span></div>`;
+            }
+            return rows;
+        }
+
+        // Renders the card for one day: the Sky & Sea scene (now-centered on today,
+        // noon-centered otherwise), the moon-phase caption, that day's tides, and
+        // the full sun/moon time columns. `smDay` is the day's USNO data, `celestial`
+        // the multi-day model for the scene.
+        function renderDayCard(dateStr, isToday, offset, smDay, celestial) {
+            const box = document.getElementById('todayInfo').querySelector('.data-box');
+            const preds = appState.preds;
+            const phase = parsePhase(smDay.curphase, smDay.fracillum);
+            // Water temp is a live "latest" observation — only shown for today.
+            let tempF = null;
+            if (isToday) {
+                const reading = appState.tempData && appState.tempData.data && appState.tempData.data[0];
+                tempF = reading ? parseFloat(reading.v) : null;
             }
 
-            // --- full sun/moon time columns ---
+            const sceneOpts = isToday ? { showNow: true } : { centerH: offset * 24 + 12, showNow: false };
+            const sceneHTML = `<div class="scene">${buildSceneSvg(celestial, preds, phase, tempF, sceneOpts)}</div>`;
+
+            const phaseCap = phase ? `
+                <div class="phase-cap">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">${moonGlyph(12, 12, 11, phase)}</svg>
+                    <span>${smDay.curphase} &middot; ${smDay.fracillum} lit</span>
+                </div>` : '';
+
+            const tideRows = buildTideRows(dateStr, isToday);
+
             const sunLabels = { 'Begin Civil Twilight': 'First Light', 'Upper Transit': 'Midday', 'End Civil Twilight': 'Last Light' };
             const sunOrder = ['Begin Civil Twilight', 'Rise', 'Upper Transit', 'Set', 'End Civil Twilight'];
             const moonLabels = { 'Rise': 'Rise', 'Upper Transit': 'Zenith', 'Set': 'Set' };
             const moonOrder = ['Rise', 'Upper Transit', 'Set'];
-            const sunBy = {}; (sunMoonToday.sundata || []).forEach(i => sunBy[i.phen] = i.time);
-            const moonBy = {}; (sunMoonToday.moondata || []).forEach(i => moonBy[i.phen] = i.time);
+            const sunBy = {}; (smDay.sundata || []).forEach(i => sunBy[i.phen] = i.time);
+            const moonBy = {}; (smDay.moondata || []).forEach(i => moonBy[i.phen] = i.time);
             const row = (label, value) => `<div class="data-item"><span class="data-label">${label}:</span><span>${value || '—'}</span></div>`;
             const sunRows = sunOrder.map(p => row(sunLabels[p] || p, sunBy[p])).join('');
             const moonRows = moonOrder.map(p => row(moonLabels[p], moonBy[p])).join('');
@@ -987,49 +1101,112 @@
             document.getElementById('todayInfo').style.display = 'flex';
         }
 
-        async function updateAllInfo() {
+        // Draws the day at the current dayOffset. Pulls that day's sun/moon and its
+        // two neighbours (needed for the scene's day/night bands and overnight moon
+        // arcs) lazily + cached, then renders from the already-loaded tide month.
+        // Guarded by renderToken so a fast swipe doesn't paint a stale day.
+        async function renderDay() {
+            const token = ++renderToken;
+            const offset = dayOffset;
+            const dateStr = zoneDateOffset(offset);
+            const isToday = offset === 0;
+            updateDayNav();
+            updateCurrentDate();
+
+            const [smPrev, smDay, smNext] = await Promise.all([
+                getSunMoon(zoneDateOffset(offset - 1)).catch(() => null),
+                getSunMoon(dateStr).catch(() => null),
+                getSunMoon(zoneDateOffset(offset + 1)).catch(() => null)
+            ]);
+            if (token !== renderToken) return;   // superseded by a newer render
+
+            document.getElementById('loading').style.display = 'none';
+            if (!smDay) {   // the day itself failed — can't draw its scene
+                const err = document.getElementById('error');
+                err.style.display = 'block';
+                err.textContent = 'Could not load that day. Please try again later.';
+                return;
+            }
+            document.getElementById('error').style.display = 'none';
+
+            const celestial = buildCelestial([
+                { off: offset - 1, data: smPrev },
+                { off: offset, data: smDay },
+                { off: offset + 1, data: smNext }
+            ]);
+            renderDayCard(dateStr, isToday, offset, smDay, celestial);
+
+            // Prefetch one day further out each way so swiping stays instant.
+            if (offset + 2 <= MAX_DAY_AHEAD) getSunMoon(zoneDateOffset(offset + 2)).catch(() => {});
+            if (offset - 2 >= 0) getSunMoon(zoneDateOffset(offset - 2)).catch(() => {});
+        }
+
+        // Ensures the location's data is loaded (showing the loader while it is),
+        // then renders the current day. Day swipes within a loaded location reuse
+        // appState and never hit this path.
+        async function loadAndRender() {
             const loadingElement = document.getElementById('loading');
             const errorElement = document.getElementById('error');
-            // Capture which location this run is for, so a fast switch mid-fetch
-            // doesn't render stale data over the newer selection.
-            const runLoc = loc;
-
             try {
-                loadingElement.style.display = 'block';
-                errorElement.style.display = 'none';
-
-                const w = locWeight(runLoc);
-                const [smYest, smToday, smTomorrow, aTide, bTide, tempData, aBaseline, bDatums] = await Promise.all([
-                    fetchData(getSunMoonApiUrl(zoneDateOffset(-1))).then(d => d.properties.data).catch(() => null),
-                    fetchData(getSunMoonApiUrl(getTodayDate())).then(d => d.properties.data),
-                    fetchData(getSunMoonApiUrl(zoneDateOffset(1))).then(d => d.properties.data).catch(() => null),
-                    fetchData(getTideApiUrl(runLoc.anchorA.id)),
-                    fetchData(getTideApiUrl(runLoc.anchorB.id)),
-                    fetchData(getWaterTempUrl(runLoc.tempStation.id)).catch(() => null),
-                    getTideBaseline(runLoc.anchorA.id).catch(() => null),
-                    getStationDatums(runLoc.anchorB.id).catch(() => null)
-                ]);
-
-                // A newer selection won the race; let that run own the display.
-                if (runLoc.id !== loc.id) return;
-
-                const estimated = estimateTides(aTide.predictions, bTide.predictions, w);
-                const baseline = aBaseline
-                    ? { highs: aBaseline.highs, lows: aBaseline.lows, datums: interpDatums(aBaseline.datums, bDatums, w) }
-                    : null;
-                const celestial = buildCelestial([{ off: -1, data: smYest }, { off: 0, data: smToday }, { off: 1, data: smTomorrow }]);
-
-                updateTodayInfo(estimated, baseline, smToday, celestial, tempData);
-                updateCurrentDate();
+                if (appState.locId !== loc.id) {
+                    loadingElement.style.display = 'block';
+                    errorElement.style.display = 'none';
+                    document.getElementById('todayInfo').style.display = 'none';
+                    const ok = await loadLocationData();
+                    if (!ok) return;   // superseded by a newer location
+                }
+                await renderDay();
                 refreshLandscape();
-
-                loadingElement.style.display = 'none';
             } catch (error) {
-                if (runLoc.id !== loc.id) return;   // a newer selection is loading
                 loadingElement.style.display = 'none';
                 errorElement.style.display = 'block';
                 errorElement.textContent = 'Failed to load data. Please try again later.';
             }
+        }
+
+        // Periodic refresh of the slowly-changing tide/temp data; re-renders the
+        // current day on success and quietly keeps the old data on failure.
+        async function refreshLocationData() {
+            try { if (await loadLocationData()) renderDay(); } catch (e) { /* keep current */ }
+        }
+
+        // --- Day look-ahead navigation ---------------------------------------
+
+        function updateDayNav() {
+            const label = document.getElementById('dayLabel');
+            if (dayOffset === 0) label.textContent = 'Today';
+            else if (dayOffset === 1) label.textContent = 'Tomorrow';
+            else {
+                const d = new Date(Date.now() + dayOffset * 86400000);
+                label.textContent = d.toLocaleDateString(undefined, { timeZone: loc.timeZone, weekday: 'short', month: 'short', day: 'numeric' });
+            }
+            document.getElementById('dayPrev').disabled = dayOffset <= 0;
+            document.getElementById('dayNext').disabled = dayOffset >= MAX_DAY_AHEAD;
+        }
+
+        function goToDay(offset) {
+            const clamped = Math.max(0, Math.min(MAX_DAY_AHEAD, offset));
+            if (clamped === dayOffset) return;
+            dayOffset = clamped;
+            renderDay();
+        }
+
+        function setupDayNav() {
+            document.getElementById('dayPrev').addEventListener('click', () => goToDay(dayOffset - 1));
+            document.getElementById('dayNext').addEventListener('click', () => goToDay(dayOffset + 1));
+            document.getElementById('dayLabel').addEventListener('click', () => goToDay(0));
+            // Swipe the card horizontally to change day (left = forward in time).
+            // The dominance check keeps vertical scrolling of the card unaffected.
+            const surface = document.getElementById('todayInfo');
+            let x0 = null, y0 = null;
+            surface.addEventListener('touchstart', (e) => { const t = e.changedTouches[0]; x0 = t.clientX; y0 = t.clientY; }, { passive: true });
+            surface.addEventListener('touchend', (e) => {
+                if (x0 == null) return;
+                const t = e.changedTouches[0];
+                const dx = t.clientX - x0, dy = t.clientY - y0;
+                x0 = null;
+                if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) goToDay(dayOffset + (dx < 0 ? 1 : -1));
+            }, { passive: true });
         }
 
         // --- Boot ------------------------------------------------------------
@@ -1037,8 +1214,12 @@
         renderLocationChrome();
         buildLocationMenu();
         setupLocationMenu();
-        updateAllInfo();
-        setInterval(updateAllInfo, 60000);
+        setupDayNav();
+        loadAndRender();
+        // Advance the live "now" marker on today's view each minute (no refetch).
+        setInterval(() => { if (dayOffset === 0) renderDay(); }, 60000);
+        // Refresh the slowly-changing tide/temp month periodically.
+        setInterval(refreshLocationData, 10 * 60 * 1000);
         setInterval(refreshLandscape, 5 * 60 * 1000);
     </script>
 </body>
