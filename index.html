@@ -336,6 +336,26 @@
                 radarSite: 'KRTX',
                 radarUrl: 'https://radar.weather.gov/ridge/standard/KRTX_loop.gif',
                 forecastUrl: 'https://api.weather.gov/gridpoints/PQR/75,131/forecast'
+            },
+            {
+                id: 'duxbury',
+                label: 'Duxbury',
+                title: 'Duxbury',
+                timeZone: 'America/New_York',
+                // Duxbury, MA on Duxbury Bay / Plymouth Bay. The bay opens
+                // southward, so we bracket by latitude: Plymouth to the south
+                // and Scituate to the north.
+                target: { name: 'Duxbury', lat: 42.0418, lon: -70.6721 },
+                axis: 'lat',
+                anchorA: { id: '8446493', name: 'Plymouth', lat: 41.96 },
+                anchorB: { id: '8445138', name: 'Scituate', lat: 42.2017 },
+                // Nearest CO-OPS water-temp sensor is Fall River, MA.
+                tempStation: { id: '8447386', name: 'Fall River, MA' },
+                footerSource: 'Estimated tide · Plymouth + Scituate',
+                // KBOX is the NWS Taunton/Boston radar; BOX grid 87,89 the forecast cell.
+                radarSite: 'KBOX',
+                radarUrl: 'https://radar.weather.gov/ridge/standard/KBOX_loop.gif',
+                forecastUrl: 'https://api.weather.gov/gridpoints/BOX/87,89/forecast'
             }
         ];
 
